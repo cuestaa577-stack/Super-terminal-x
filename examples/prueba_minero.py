@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
 """Minero Stratum de prueba para solo mining, pensado para el telefono.
 
-A diferencia de prueba_stratum.py, este SI construye trabajo real:
+Arma trabajo real: cabecera = version + prevhash + merkle_root + ntime +
+nbits + nonce, con la moneda base construida desde coinb1 + extranonce1 +
+extranonce2 + coinb2 y la raiz de merkle con las ramas de la pool. Por eso una
+share encontrada se puede enviar y la pool la puede aceptar de verdad.
 
-    cabecera = version + prevhash + merkle_root + ntime + nbits + nonce
-
-con la moneda base armada a partir de coinb1 + extranonce1 + extranonce2 +
-coinb2 y la raiz de merkle calculada con las ramas que manda la pool. Por eso
-una share encontrada se puede enviar y la pool la puede aceptar de verdad.
-
-Lo que NO hace falta esperar: esto corre en Python sobre la CPU del telefono.
-A dificultad 10000 la probabilidad de acertar una share es de una entre unos
-6 500 millones de hashes, asi que veras muy pocas. Y encontrar un bloque
-completo en solo mining con esta potencia es, en la practica, imposible. El
-panel lo dice con numeros en vez de prometer ganancias.
+Red:
+  * El nombre de la pool se resuelve UNA vez y se guarda la IP. Asi un fallo
+    momentaneo de DNS no tumba el bucle de reconexion (era el "errno 7":
+    EAI_NODATA, no un corte de socket).
+  * Ping cada 15 s por defecto, muy por debajo de los 20-30 s en que el NAT
+    del operador o el router reciclan una conexion callada.
+  * Cualquier error de red se cierra limpio y se reintenta con espera
+    creciente. El hilo que calcula hashes nunca se queda bloqueado.
 
 Uso:
     python3 prueba_minero.py <direccion_btc> [host] [puerto]
-    python3 prueba_minero.py bc1... solo.ckpool.org 3333
-    PRUEBA_PING=5 python3 prueba_minero.py bc1...     (ping cada 5 s)
-    PRUEBA_DIFICULTAD=64 python3 prueba_minero.py ... (solo si la pool no la fija)
-    PRUEBA_SUGERIR=64 python3 prueba_minero.py ...    (pide dificultad baja a la pool)
+    PRUEBA_PING=10 python3 prueba_minero.py bc1...      (ping cada 10 s)
+    PRUEBA_SUGERIR=64 python3 prueba_minero.py bc1...   (pide dificultad baja)
 
 Ctrl+C lo detiene y muestra el resumen.
 """
+import errno
 import hashlib
 import json
 import os
@@ -40,20 +39,19 @@ AZUL = "\033[94m"
 GRIS = "\033[90m"
 RESET = "\033[0m"
 
-# Objetivo de dificultad 1 de Bitcoin.
 BASE_TARGET = 0x0000FFFF * (1 << 208)
 
-# Un socket mudo se muere con errno 103 cuando el NAT del operador recicla la
-# conexion a los 20-30 s, asi que se manda ping muy seguido y se lee con
-# tiempo de espera corto para poder hacerlo.
-PING_EVERY = max(3, int(os.environ.get("PRUEBA_PING", "10")))
-RECV_TIMEOUT = 2.0
+PING_EVERY = max(5, int(os.environ.get("PRUEBA_PING", "15")))
+RECV_TIMEOUT = 2.0          # para poder pingear aunque la pool calle
+CONNECT_TIMEOUT = 15.0
 RESUMEN_EVERY = 15
 LOTE_NONCES = 8192
+DNS_TTL = 600               # segundos que se reutiliza la IP resuelta
+ESPERA_MAX = 30
 
 try:
     from prueba_stratum import normalizar_cuenta
-except Exception:  # si se copia el archivo solo, sin el otro a mano
+except Exception:
     def normalizar_cuenta(cuenta):
         return cuenta.strip(), None
 
@@ -63,7 +61,7 @@ def doble_sha(datos):
 
 
 def objetivo(dificultad):
-    """Target para una dificultad dada, sin perder precision con float."""
+    """Target de una dificultad, con enteros (float perderia precision)."""
     d = dificultad if dificultad and dificultad > 0 else 1.0
     if d >= 1:
         return BASE_TARGET // int(d)
@@ -97,17 +95,29 @@ class Minero:
         self.extranonce1 = b""
         self.extranonce2_size = 4
         self.extranonce2_siguiente = 0
-        self.dificultad = float(os.environ.get("PRUEBA_DIFICULTAD", "0") or 0) or 10000.0
-        self.dificultad_fijada_por_pool = False
+        self.dificultad = float(os.environ.get("PRUEBA_DIFICULTAD") or 10000)
+        self.dificultad_fijada = False
         self.hashes = 0
         self.shares_enviadas = 0
         self.shares_aceptadas = 0
         self.shares_rechazadas = 0
         self.inicio = time.time()
-        self.conectado_desde = 0.0
+        self.conectado = False
+        self.ip = None
+        self.ip_momento = 0.0
         self.corriendo = True
 
-    # ---------- red ----------
+    # ---------------- red ----------------
+    def resolver(self, forzar=False):
+        """IP de la pool, cacheada. Evita que un fallo de DNS mate el bucle."""
+        if not forzar and self.ip and time.time() - self.ip_momento < DNS_TTL:
+            return self.ip
+        info = socket.getaddrinfo(self.host, self.puerto, socket.AF_INET, socket.SOCK_STREAM)
+        self.ip = info[0][4][0]
+        self.ip_momento = time.time()
+        log("DNS", "%s -> %s" % (self.host, self.ip), GRIS)
+        return self.ip
+
     def enviar(self, objeto):
         datos = (json.dumps(objeto) + "\n").encode("utf-8")
         with self.socket_lock:
@@ -117,55 +127,107 @@ class Minero:
             try:
                 sock.sendall(datos)
             except OSError:
-                pass
+                pass        # la reconexion se encarga; el motor no se entera
 
-    def cerrar_socket(self):
+    def cerrar(self):
         with self.socket_lock:
-            if self.sock is not None:
-                try:
-                    self.sock.close()
-                except OSError:
-                    pass
-                self.sock = None
+            sock, self.sock = self.sock, None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+        self.conectado = False
+
+    def motivo(self, e):
+        """Traduce el error de red a algo entendible en el telefono."""
+        if isinstance(e, socket.gaierror):
+            codigo = getattr(e, "errno", None)
+            if codigo in (7, -2, -3, -5):
+                return "no se pudo resolver %s (DNS)" % self.host
+            return "fallo de DNS (%s)" % (e.strerror or e)
+        codigo = getattr(e, "errno", None)
+        if codigo == errno.ECONNREFUSED:
+            return "la pool rechazo la conexion"
+        if codigo in (errno.ETIMEDOUT,):
+            return "tiempo de espera agotado"
+        if codigo in (errno.ECONNABORTED, errno.ECONNRESET, errno.EPIPE):
+            return "la conexion se corto (errno %s)" % codigo
+        if codigo in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN):
+            return "sin red en este momento (errno %s)" % codigo
+        if codigo is None:
+            return str(e)
+        return "%s (errno %s)" % (e.strerror or "error de red", codigo)
 
     def conectar(self):
+        espera = 3
         while self.corriendo:
             try:
-                sock = socket.create_connection((self.host, self.puerto), timeout=20)
+                ip = self.resolver()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.settimeout(CONNECT_TIMEOUT)
+                sock.connect((ip, self.puerto))
                 sock.settimeout(RECV_TIMEOUT)
                 with self.socket_lock:
                     self.sock = sock
-                self.conectado_desde = time.time()
+                self.conectado = True
+                self.inicio_conexion = time.time()
                 with self.trabajo_lock:
-                    self.trabajo = None      # el de la conexion anterior no sirve
+                    self.trabajo = None      # el de antes no sirve
                 self.extranonce2_siguiente = 0
-                log("CONECTADO", "%s:%s" % (self.host, self.puerto), VERDE)
+                espera = 3                   # se recupera el ritmo normal
+                log("CONECTADO", "%s:%s (%s)" % (self.host, self.puerto, ip), VERDE)
                 self.enviar({"id": 1, "method": "mining.subscribe",
                              "params": ["prueba-minero/1.0"]})
                 self.leer()
+
+                # Salida limpia del bucle de lectura.
+                duró = int(time.time() - self.inicio_conexion)
+                log("DESCONECTADO", "la pool cerro la conexion tras %d s" % duró, AMARILLO)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except socket.gaierror as e:
+                self.ip = None            # la proxima vez, resolver de nuevo
+                log("SIN DNS", "%s; reintento en %d s" % (self.motivo(e), espera), ROJO)
             except OSError as e:
-                duró = int(time.time() - self.conectado_desde) if self.conectado_desde else 0
-                log("RECONEXION", "socket abortado (errno %s) tras %d s; reintento en 3 s"
-                    % (getattr(e, "errno", "?"), duró), ROJO)
+                if self.conectado:
+                    duró = int(time.time() - getattr(self, "inicio_conexion", time.time()))
+                    log("RECONEXION", "%s tras %d s; reintento en %d s"
+                        % (self.motivo(e), duró, espera), ROJO)
+                else:
+                    log("SIN CONEXION", "%s; reintento en %d s" % (self.motivo(e), espera), ROJO)
+                if isinstance(e, socket.gaierror) or getattr(e, "errno", None) in (
+                        errno.ECONNREFUSED, errno.ENETUNREACH, errno.EHOSTUNREACH):
+                    self.ip = None
             finally:
-                self.cerrar_socket()
-            if self.corriendo:
-                time.sleep(3)
+                self.cerrar()
+            if not self.corriendo:
+                break
+            time.sleep(espera)
+            espera = min(ESPERA_MAX, espera * 2)
 
     def leer(self):
+        """Lee hasta que la conexion muere. No propaga excepciones."""
         buffer = b""
         ultimo_ping = 0.0
         while self.corriendo:
+            sock = self.sock
+            if sock is None:
+                return
             try:
-                datos = self.sock.recv(4096)
+                datos = sock.recv(4096)
             except socket.timeout:
-                datos = None
-            except OSError:
+                datos = None                       # normal: toca pingear
+            except (OSError, ConnectionError) as e:
+                log("AVISO", "lectura interrumpida: %s" % self.motivo(e), AMARILLO)
                 return
             if datos == b"":
-                log("AVISO", "la pool cerro la conexion", AMARILLO)
-                return
+                return                             # cerrada por la pool
             if datos:
                 buffer += datos
                 while b"\n" in buffer:
@@ -175,14 +237,14 @@ class Minero:
                         continue
                     try:
                         self.procesar(json.loads(linea.decode("utf-8", "replace")))
-                    except (ValueError, IndexError, TypeError) as e:
+                    except (ValueError, IndexError, KeyError, TypeError) as e:
                         log("AVISO", "mensaje raro de la pool: %s" % e, AMARILLO)
             ahora = time.time()
             if ahora - ultimo_ping >= PING_EVERY:
                 self.enviar({"id": 900, "method": "mining.ping", "params": []})
                 ultimo_ping = ahora
 
-    # ---------- protocolo ----------
+    # ---------------- protocolo ----------------
     def procesar(self, msg):
         metodo = msg.get("method")
         if metodo == "mining.notify":
@@ -191,23 +253,17 @@ class Minero:
                 e2 = self.extranonce2_siguiente
                 self.extranonce2_siguiente += 1
                 self.trabajo = {
-                    "job_id": p[0],
-                    "prevhash": p[1],
-                    "coinb1": p[2],
-                    "coinb2": p[3],
-                    "merkle": list(p[4] or []),
-                    "version": p[5],
-                    "nbits": p[6],
-                    "ntime": p[7],
-                    "clean": bool(p[8]),
-                    "extranonce2": ("%0*x" % (2 * self.extranonce2_size, e2)),
+                    "job_id": p[0], "prevhash": p[1], "coinb1": p[2], "coinb2": p[3],
+                    "merkle": list(p[4] or []), "version": p[5], "nbits": p[6],
+                    "ntime": p[7], "clean": bool(p[8]),
+                    "extranonce2": "%0*x" % (2 * self.extranonce2_size, e2),
                 }
                 cabecera, _ = self.preparar(self.trabajo)
             if cabecera:
                 log("TRABAJO", "job %s · cabecera lista (%d bytes)" % (p[0], len(cabecera)))
         elif metodo == "mining.set_difficulty":
             self.dificultad = float(msg["params"][0] or 1)
-            self.dificultad_fijada_por_pool = True
+            self.dificultad_fijada = True
             log("DIFICULTAD", "%g (fijada por la pool)" % self.dificultad)
         elif metodo == "mining.set_extranonce":
             params = msg.get("params") or []
@@ -222,7 +278,7 @@ class Minero:
         ident = msg.get("id")
         result = msg.get("result")
         if ident == 900:
-            return                      # respuesta a nuestro mining.ping
+            return                                  # respuesta al ping
         if ident == 1:
             if not result:
                 log("ERROR", "la pool rechazo la suscripcion: %s" % msg.get("error"), ROJO)
@@ -234,18 +290,17 @@ class Minero:
                          "params": [self.cuenta, "x"]})
         elif ident == 2:
             if result is True:
-                log("AUTORIZADO", "la pool acepto la cuenta %s" % self.cuenta, VERDE)
-                if not self.dificultad_fijada_por_pool:
-                    log("DIFICULTAD", "%g (por defecto del script)" % self.dificultad, GRIS)
+                log("AUTORIZADO", "la pool acepto %s" % self.cuenta, VERDE)
+                if not self.dificultad_fijada:
+                    log("DIFICULTAD", "%g (por defecto)" % self.dificultad, GRIS)
                 sugerida = os.environ.get("PRUEBA_SUGERIR")
                 if sugerida:
-                    # Atajo para pruebas: pedir dificultad baja y ver shares
-                    # aceptadas de verdad. Si la pool lo ignora, no pasa nada.
                     self.enviar({"id": 3, "method": "mining.suggest_difficulty",
                                  "params": [float(sugerida)]})
                     log("SUGERENCIA", "pedida dificultad %s" % sugerida, GRIS)
             else:
-                log("RECHAZADO", "la pool no acepto la cuenta: %s" % (msg.get("error") or result), ROJO)
+                log("RECHAZADO", "la pool no acepto la cuenta: %s"
+                    % (msg.get("error") or result), ROJO)
         elif isinstance(ident, int) and ident >= 100:
             if result is True:
                 self.shares_aceptadas += 1
@@ -254,9 +309,8 @@ class Minero:
                 self.shares_rechazadas += 1
                 log("SHARE", "rechazada: %s" % (msg.get("error") or result), ROJO)
 
-    # ---------- trabajo ----------
+    # ---------------- trabajo ----------------
     def preparar(self, t):
-        """Devuelve (cabecera sin nonce, target). Cabecera = 76 bytes."""
         try:
             coinbase = (bytes.fromhex(t["coinb1"]) + self.extranonce1
                         + bytes.fromhex(t["extranonce2"]) + bytes.fromhex(t["coinb2"]))
@@ -265,15 +319,11 @@ class Minero:
                 raiz = doble_sha(raiz + bytes.fromhex(rama))
             version = bytes.fromhex(t["version"])[::-1]
             prev = bytes.fromhex(t["prevhash"])
-            # Stratum manda el prevhash como 8 palabras de 4 bytes; la cabecera
-            # las quiere invertidas palabra por palabra, no el bloque entero.
             prevhash = b"".join(prev[i:i + 4][::-1] for i in range(0, len(prev), 4))
             ntime = bytes.fromhex(t["ntime"])[::-1]
             nbits = bytes.fromhex(t["nbits"])[::-1]
             base = version + prevhash + raiz + ntime + nbits
-            if len(base) != 76:
-                return None, 0
-            return base, objetivo(self.dificultad)
+            return (base, objetivo(self.dificultad)) if len(base) == 76 else (None, 0)
         except (ValueError, KeyError, TypeError):
             return None, 0
 
@@ -296,22 +346,22 @@ class Minero:
             if not cabecera:
                 time.sleep(0.2)
                 continue
+            desde = t.get("nonce", 0)
             encontrado = None
             for i in range(LOTE_NONCES):
-                nonce = (t["nonce"] + i) & 0xFFFFFFFF if "nonce" in t else i
+                nonce = (desde + i) & 0xFFFFFFFF
                 h = doble_sha(cabecera + struct.pack("<I", nonce))
                 self.hashes += 1
                 if int.from_bytes(h, "little") <= target:
                     encontrado = nonce
                     break
             with self.trabajo_lock:
-                if self.trabajo is t:
-                    t["nonce"] = ((t.get("nonce", 0) + LOTE_NONCES) & 0xFFFFFFFF)
                 sigue = self.trabajo is t
+                if sigue:
+                    t["nonce"] = (desde + LOTE_NONCES) & 0xFFFFFFFF
             if encontrado is not None and sigue:
                 self.enviar_share(t, encontrado)
-            if not sigue:
-                continue
+            time.sleep(0.002)      # deja respirar al lector y al procesador
 
     def resumen(self):
         while self.corriendo:
@@ -321,15 +371,16 @@ class Minero:
             ritmo = "%.0f H/s" % hps
             if hps >= 1000:
                 ritmo = "%.1f kH/s" % (hps / 1000)
-            espera = self.dificultad * (1 << 32) / max(1.0, hps)
             print("%s--- panel ---%s" % (AZUL, RESET))
             print("  tiempo        %s" % duracion(seg))
+            print("  conexion      %s" % ("abierta" if self.conectado else "reintentando"))
             print("  hashrate      %s" % ritmo)
             print("  hashes        %d" % self.hashes)
             print("  shares        %d enviadas · %d aceptadas · %d rechazadas"
                   % (self.shares_enviadas, self.shares_aceptadas, self.shares_rechazadas))
             print("  dificultad    %g" % self.dificultad)
-            print("  una share     cada ~%s de media a este ritmo" % duracion(espera))
+            print("  una share     cada ~%s de media a este ritmo"
+                  % duracion(self.dificultad * (1 << 32) / max(1.0, hps)))
             print("%s----------------%s" % (AZUL, RESET), flush=True)
 
 
@@ -344,9 +395,9 @@ def main():
     puerto = int(sys.argv[3]) if len(sys.argv) > 3 else 3333
 
     minero = Minero(cuenta, host, puerto)
-    print("%sSolo mining real, pero en CPU.%s A dificultad %g hace falta una media de "
-          "%s hashes por share, y un bloque es mucho mas: esto sirve para probar el "
-          "circuito, no para ganar dinero."
+    print("%sSolo mining real, pero en CPU.%s A dificultad %g una share pide unos "
+          "%s hashes de media, y un bloque muchisimo mas: esto prueba el circuito, "
+          "no da ganancias."
           % (GRIS, RESET, minero.dificultad,
              "{:,}".format(int(minero.dificultad * (1 << 32))).replace(",", ".")), flush=True)
 
@@ -356,10 +407,9 @@ def main():
         minero.conectar()
     except KeyboardInterrupt:
         minero.corriendo = False
-        log("FIN", "detenido a mano · %d hashes, %d shares enviadas"
+        minero.cerrar()
+        log("FIN", "detenido · %d hashes, %d shares enviadas"
             % (minero.hashes, minero.shares_enviadas), AMARILLO)
-    finally:
-        minero.cerrar_socket()
     return 0
 
 
