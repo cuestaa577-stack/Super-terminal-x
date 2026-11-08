@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Prueba de estabilidad Stratum contra CKPool, con salida legible.
 
-No mina: se conecta, se autoriza, escucha y hace ping cada 45 s. Sirve para
+No mina: se conecta, se autoriza, escucha y hace ping cada 10 s. Sirve para
 comprobar que el socket sobrevive con la pantalla apagada y para ver, en
 español y sin JSON crudo, lo que manda el pool.
+
+El ping corto no es capricho: una conexión que no manda nada se muere con
+"errno 103" cuando el operador móvil recicla el NAT a los 20-30 s. Con
+tráfico cada 10 s la conexión se mantiene abierta. Para probar otro ritmo:
+    PRUEBA_PING=5 python3 prueba_stratum.py <direccion>
 
 Uso:
     python3 prueba_stratum.py <tu_direccion_btc>
@@ -17,6 +22,7 @@ El manejo de mining.submit está implementado para cuando lo uses con el
 minero real: verás "SHARE aceptada" o "SHARE rechazada" con el motivo.
 """
 import json
+import os
 import signal
 import socket
 import sys
@@ -24,7 +30,7 @@ import threading
 import time
 from collections import deque
 
-PING_EVERY = 45
+PING_EVERY = max(3, int(os.environ.get("PRUEBA_PING", "10")))
 RESUMEN_EVERY = 300
 SILENCIO_AVISO = 120
 RECONECTABLES = {32, 103, 104, 110}
@@ -378,6 +384,7 @@ def main():
     intento = 0
     while True:
         s = None
+        inicio_conexion = 0.0
         try:
             s = abrir(host, puerto)
             with _lock:
@@ -391,6 +398,7 @@ def main():
             # rechace la autorización por formato.
             enviar(s, {"id": nuevo_id(), "method": "mining.authorize",
                        "params": [usuario, "x"]}, "autorizacion")
+            inicio_conexion = time.time()
             log("CONECTADO", "%s:%s como %s" % (host, puerto, usuario))
             log("CUENTA", "authorize con %r" % usuario)
             intento = 0
@@ -430,7 +438,10 @@ def main():
             if e.errno in RECONECTABLES:
                 intento += 1
                 espera = min(60, 2 ** min(intento, 5))
-                log("RECONEXION", "socket abortado (errno %s), reintento en %d s" % (e.errno, espera))
+                duró = int(time.time() - inicio_conexion) if inicio_conexion else 0
+                quieto = int(time.time() - ESTADO.ultimo_mensaje) if ESTADO.ultimo_mensaje else 0
+                log("RECONEXION", "socket abortado (errno %s) tras %d s; llevaba %d s sin "
+                    "recibir nada; reintento en %d s" % (e.errno, duró, quieto, espera))
                 time.sleep(espera)
                 continue
             log("ERROR", "fallo no recuperable: %s" % e)
