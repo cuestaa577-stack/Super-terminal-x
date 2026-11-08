@@ -1,6 +1,7 @@
 package dev.codesnack.linuxterm;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -20,6 +21,7 @@ import android.widget.TextView;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -31,6 +33,12 @@ public class MainActivity extends Activity {
     private static final int TEXT = Color.rgb(220, 230, 220);
     private static final int BG = Color.rgb(16, 18, 20);
     private static final int PROMPT = Color.rgb(90, 200, 255);
+
+    /** Secuencias de color y control de cursor que devuelve un TTY. */
+    private static final java.util.regex.Pattern ANSI =
+            java.util.regex.Pattern.compile("\u001B\\[[0-9;?]*[ -/]*[@-~]|\u001B[()][0-9A-Za-z]|\u001B[=>]");
+    private static final int REQ_EDIT = 10;
+    private static final int REQ_FILES = 11;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private TextView output;
@@ -54,6 +62,12 @@ public class MainActivity extends Activity {
             + "  sqlite3 base.db     base de datos ligera\n"
             + "  servidor [puerto]   servidor HTTP en 127.0.0.1 (por defecto 8080)\n"
             + "  servidor parar      detener el servidor\n"
+            + "  archivos            explorador y editor de la carpeta de inicio\n"
+            + "  editar archivo.py   abrir un archivo en el editor táctil\n"
+            + "  bg <comando>        ejecutar en segundo plano (sigue aunque termine el comando)\n"
+            + "  jobs                ver los trabajos en segundo plano\n"
+            + "  log <n>             ver la salida del trabajo n\n"
+            + "  kill <n>            detener el trabajo n\n"
             + "  probar [puerto] [ruta]  pedir una URL local y mostrar la respuesta\n"
             + "  entorno             estado de la instalación";
 
@@ -132,6 +146,11 @@ public class MainActivity extends Activity {
         run.setText("Ejecutar");
         run.setOnClickListener(v -> submit());
         row.addView(run);
+
+        Button files = new Button(this);
+        files.setText("Archivos");
+        files.setOnClickListener(v -> openFiles());
+        row.addView(files);
 
         stopButton = new Button(this);
         stopButton.setText("Parar");
@@ -235,6 +254,26 @@ public class MainActivity extends Activity {
             case "parar":
             case "stop":
                 stopMonitor();
+                return;
+            case "archivos":
+            case "files":
+                openFiles();
+                return;
+            case "editar":
+            case "edit":
+                openEditor(rest(line));
+                return;
+            case "bg":
+                startJob(rest(line));
+                return;
+            case "jobs":
+                println(Jobs.list());
+                return;
+            case "log":
+                showLog(args);
+                return;
+            case "kill":
+                killJob(args);
                 return;
             default:
                 runShell(line);
@@ -412,16 +451,17 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             StringBuilder sb = new StringBuilder();
             try {
-                ProcessBuilder pb = new ProcessBuilder("/system/bin/sh", "-c", line);
+                ProcessBuilder pb = shellCommand(line);
                 pb.environment().putAll(Bootstrap.env(this));
                 pb.directory(Bootstrap.home(this));
                 pb.redirectErrorStream(true);
                 Process p = pb.start();
-                BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), "UTF-8"));
                 Thread reader = new Thread(() -> {
                     try {
                         String l;
                         while ((l = r.readLine()) != null) {
+                            l = ANSI.matcher(l).replaceAll("").replace("\r", "");
                             synchronized (sb) {
                                 sb.append(l).append('\n');
                             }
@@ -446,5 +486,103 @@ public class MainActivity extends Activity {
             }
             ui.post(() -> println(out.isEmpty() ? "(sin salida)" : out));
         }, "shell").start();
+    }
+
+    /** Comando de shell dentro de un PTY real si el entorno está instalado; si no, la shell de Android. */
+    private ProcessBuilder shellCommand(String line) {
+        File py = new File(Bootstrap.usr(this), "bin/python3");
+        File script = ptyScript();
+        if (py.exists() && script != null) {
+            return new ProcessBuilder(py.getAbsolutePath(), script.getAbsolutePath(), line);
+        }
+        return new ProcessBuilder("/system/bin/sh", "-c", line);
+    }
+
+    /** Copia ptyrun.py de los recursos a la carpeta de la app (una vez por versión). */
+    private File ptyScript() {
+        File out = new File(getFilesDir(), "ptyrun.py");
+        try (InputStream in = getAssets().open("ptyrun.py")) {
+            byte[] data = readAll(in);
+            if (!out.exists() || out.length() != data.length) {
+                try (FileOutputStream fo = new FileOutputStream(out)) {
+                    fo.write(data);
+                }
+            }
+            return out;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        byte[] tmp = new byte[8192];
+        int n;
+        while ((n = in.read(tmp)) > 0) buf.write(tmp, 0, n);
+        return buf.toByteArray();
+    }
+
+    private void openFiles() {
+        startActivityForResult(new Intent(this, FilesActivity.class), REQ_FILES);
+    }
+
+    private void openEditor(String name) {
+        String n = name.trim();
+        File f = n.isEmpty() ? new File(Bootstrap.home(this), "nuevo.py") : new File(Bootstrap.home(this), n);
+        Intent i = new Intent(this, EditorActivity.class);
+        i.putExtra(EditorActivity.EXTRA_PATH, f.getAbsolutePath());
+        startActivityForResult(i, REQ_EDIT);
+    }
+
+    private void startJob(String cmd) {
+        if (cmd.trim().isEmpty()) {
+            println("Uso: bg <comando>   (ejemplo: bg python3 servidor.py)");
+            return;
+        }
+        if (!envReady && !Bootstrap.isInstalled(this)) {
+            println("El entorno todavía se está preparando. Espera un momento.");
+            return;
+        }
+        try {
+            int id = Jobs.start(this, cmd);
+            println("Trabajo " + id + " en segundo plano. Ver salida: log " + id + "  ·  lista: jobs");
+        } catch (IOException e) {
+            println("No se pudo arrancar el trabajo: " + e.getMessage());
+        }
+    }
+
+    private void showLog(String[] args) {
+        if (args.length == 0) {
+            println("Uso: log <número de trabajo>");
+            return;
+        }
+        try {
+            println(Jobs.tail(Integer.parseInt(args[0]), 40));
+        } catch (NumberFormatException e) {
+            println("Uso: log <número de trabajo>");
+        }
+    }
+
+    private void killJob(String[] args) {
+        if (args.length == 0) {
+            println("Uso: kill <número de trabajo>");
+            return;
+        }
+        try {
+            println(Jobs.kill(Integer.parseInt(args[0])));
+        } catch (NumberFormatException e) {
+            println("Uso: kill <número de trabajo>");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if ((requestCode == REQ_EDIT || requestCode == REQ_FILES) && resultCode == RESULT_OK
+                && data != null && data.hasExtra(EditorActivity.RESULT_RUN)) {
+            String cmd = data.getStringExtra(EditorActivity.RESULT_RUN);
+            println("$ " + cmd);
+            runShell(cmd);
+        }
     }
 }
