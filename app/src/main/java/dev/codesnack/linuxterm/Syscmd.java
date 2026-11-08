@@ -30,6 +30,8 @@ public final class Syscmd {
             + "  limpiar                   borra la pantalla\n"
             + "  bateria                   quita la optimización de batería de la app\n"
             + "  ejemplos                  muestra la carpeta ~/examples\n"
+            + "                            sus scripts se ejecutan desde ~ sin cd:\n"
+            + "                            python3 prueba_stratum.py <direccion>\n"
             + "  consola                   terminal a pantalla completa con barra de teclas\n"
             + "                            (la app arranca ahí; ☰ Menú abre diagnóstico, entorno y ejemplos)\n"
             + "  help                      esta ayuda\n"
