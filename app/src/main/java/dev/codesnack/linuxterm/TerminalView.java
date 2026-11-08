@@ -103,61 +103,6 @@ public class TerminalView extends View {
         if (listener != null) listener.onSize(rows, cols);
     }
 
-    /** Recalcula el tamaño de celda a partir del tamaño de fuente actual. */
-    private void aplicarMetricas() {
-        paint.setTextSize(sp(textSp));
-        cellW = paint.measureText("M");
-        Paint.FontMetrics fm = paint.getFontMetrics();
-        cellH = fm.bottom - fm.top;
-        ascent = -fm.top;
-    }
-
-    /** Tamaño de texto actual, en sp. */
-    float textSp() {
-        return textSp;
-    }
-
-    /**
-     * Cambia el tamaño de la fuente dentro de los límites y recalcula filas y
-     * columnas para el nuevo tamaño de celda.
-     */
-    private void fijarSp(float sp, boolean guardar) {
-        float nuevo = Math.max(MIN_SP, Math.min(MAX_SP, sp));
-        if (Math.abs(nuevo - textSp) < 0.01f) return;
-        textSp = nuevo;
-        aplicarMetricas();
-        if (guardar) guardarSp();
-        resizeToView();
-        invalidate();
-    }
-
-    /** Ajusta el emulador al tamaño de la vista con la celda actual. */
-    private void resizeToView() {
-        int w = getWidth();
-        int h = getHeight();
-        if (w <= 0 || h <= 0) return;
-        int rows = rowsForHeight(h);
-        int cols = colsForWidth(w);
-        if (rows == lastRows && cols == lastCols) return;
-        lastRows = rows;
-        lastCols = cols;
-        emu.resize(rows, cols);
-        if (listener != null) listener.onSize(rows, cols);
-    }
-
-    private static float cargarSp(Context ctx) {
-        if (sessionSp > 0) return sessionSp;
-        float v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_SP, 13f);
-        sessionSp = Math.max(MIN_SP, Math.min(MAX_SP, v));
-        return sessionSp;
-    }
-
-    private void guardarSp() {
-        sessionSp = textSp;
-        getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putFloat(KEY_SP, textSp).apply();
-    }
-
     void setListener(Listener l) {
         listener = l;
     }
@@ -297,10 +242,6 @@ public class TerminalView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // El pellizco va antes que el desplazamiento: con dos dedos no se hace
-        // scroll ni se abre el teclado al soltar.
-        scaleDetector.onTouchEvent(event);
-        if (gestos.onTouchEvent(event)) return true;
         float y = event.getY();
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_POINTER_DOWN:
@@ -330,10 +271,6 @@ public class TerminalView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP:
-                if (dobleToque) {
-                    dobleToque = false;
-                    return true;
-                }
                 if (!touchMoved) {
                     requestFocus();
                     android.view.inputmethod.InputMethodManager imm =
