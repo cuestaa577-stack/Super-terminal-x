@@ -10,8 +10,9 @@ Red:
   * El nombre de la pool se resuelve UNA vez y se guarda la IP. Asi un fallo
     momentaneo de DNS no tumba el bucle de reconexion (era el "errno 7":
     EAI_NODATA, no un corte de socket).
-  * Ping cada 15 s por defecto, muy por debajo de los 20-30 s en que el NAT
-    del operador o el router reciclan una conexion callada.
+  * Ping cada 15 s por defecto, y cada 8 s si la ultima conexion duro menos
+    de un minuto: se adapta solo cuando la red esta inestable. Cada ping
+    muestra su ida y vuelta, asi se ve si el enlace se esta cayendo.
   * Cualquier error de red se cierra limpio y se reintenta con espera
     creciente. El hilo que calcula hashes nunca se queda bloqueado.
 
@@ -43,7 +44,9 @@ BASE_TARGET = 0x0000FFFF * (1 << 208)
 
 PING_EVERY = max(5, int(os.environ.get("PRUEBA_PING", "15")))
 RECV_TIMEOUT = 2.0          # para poder pingear aunque la pool calle
-CONNECT_TIMEOUT = 15.0
+CONNECT_TIMEOUT = 10.0
+PING_RAPIDO = 8             # cuando la red viene cortando seguido
+ESPERA_INICIAL = 2
 RESUMEN_EVERY = 15
 LOTE_NONCES = 8192
 DNS_TTL = 600               # segundos que se reutiliza la IP resuelta
@@ -105,6 +108,9 @@ class Minero:
         self.conectado = False
         self.ip = None
         self.ip_momento = 0.0
+        self.ping_every = PING_EVERY
+        self.ping_enviado = 0.0
+        self.ultima_duracion = 0
         self.corriendo = True
 
     # ---------------- red ----------------
@@ -117,6 +123,23 @@ class Minero:
         self.ip_momento = time.time()
         log("DNS", "%s -> %s" % (self.host, self.ip), GRIS)
         return self.ip
+
+    @staticmethod
+    def afinar_keepalive(sock):
+        """Sondas de vida cada 20 s en vez de las 2 h por defecto.
+
+        Si el kernel del telefono no soporta alguna opcion, se ignora: es un
+        extra, no un requisito.
+        """
+        for nombre, valor in (("TCP_KEEPIDLE", 20), ("TCP_KEEPINTVL", 5),
+                              ("TCP_KEEPCNT", 3), ("TCP_USER_TIMEOUT", 30000)):
+            opcion = getattr(socket, nombre, None)
+            if opcion is None:
+                continue
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, opcion, valor)
+            except OSError:
+                pass
 
     def enviar(self, objeto):
         datos = (json.dumps(objeto) + "\n").encode("utf-8")
@@ -164,12 +187,13 @@ class Minero:
         return "%s (errno %s)" % (e.strerror or "error de red", codigo)
 
     def conectar(self):
-        espera = 3
+        espera = ESPERA_INICIAL
         while self.corriendo:
             try:
                 ip = self.resolver()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.afinar_keepalive(sock)
                 sock.settimeout(CONNECT_TIMEOUT)
                 sock.connect((ip, self.puerto))
                 sock.settimeout(RECV_TIMEOUT)
@@ -180,7 +204,9 @@ class Minero:
                 with self.trabajo_lock:
                     self.trabajo = None      # el de antes no sirve
                 self.extranonce2_siguiente = 0
-                espera = 3                   # se recupera el ritmo normal
+                self.ping_every = PING_RAPIDO if 0 < self.ultima_duracion < 60 else PING_EVERY
+                if self.ultima_duracion >= 120:
+                    espera = ESPERA_INICIAL   # la red va bien: reintento corto
                 log("CONECTADO", "%s:%s (%s)" % (self.host, self.puerto, ip), VERDE)
                 self.enviar({"id": 1, "method": "mining.subscribe",
                              "params": ["prueba-minero/1.0"]})
@@ -188,6 +214,7 @@ class Minero:
 
                 # Salida limpia del bucle de lectura.
                 duró = int(time.time() - self.inicio_conexion)
+                self.ultima_duracion = duró
                 log("DESCONECTADO", "la pool cerro la conexion tras %d s" % duró, AMARILLO)
             except (KeyboardInterrupt, SystemExit):
                 raise
@@ -197,8 +224,13 @@ class Minero:
             except OSError as e:
                 if self.conectado:
                     duró = int(time.time() - getattr(self, "inicio_conexion", time.time()))
-                    log("RECONEXION", "%s tras %d s; reintento en %d s"
-                        % (self.motivo(e), duró, espera), ROJO)
+                    self.ultima_duracion = duró
+                    pista = ""
+                    if getattr(e, "errno", None) in (errno.ECONNABORTED, errno.ECONNRESET):
+                        pista = " (la red aborto el flujo: cambios de Wi-Fi a datos, "
+                        pista += "cobertura o filtrado del operador)"
+                    log("RECONEXION", "%s tras %d s; reintento en %d s%s"
+                        % (self.motivo(e), duró, espera, pista), ROJO)
                 else:
                     log("SIN CONEXION", "%s; reintento en %d s" % (self.motivo(e), espera), ROJO)
                 if isinstance(e, socket.gaierror) or getattr(e, "errno", None) in (
@@ -209,7 +241,7 @@ class Minero:
             if not self.corriendo:
                 break
             time.sleep(espera)
-            espera = min(ESPERA_MAX, espera * 2)
+            espera = min(15, espera * 2)
 
     def leer(self):
         """Lee hasta que la conexion muere. No propaga excepciones."""
@@ -240,7 +272,8 @@ class Minero:
                     except (ValueError, IndexError, KeyError, TypeError) as e:
                         log("AVISO", "mensaje raro de la pool: %s" % e, AMARILLO)
             ahora = time.time()
-            if ahora - ultimo_ping >= PING_EVERY:
+            if ahora - ultimo_ping >= self.ping_every:
+                self.ping_enviado = ahora
                 self.enviar({"id": 900, "method": "mining.ping", "params": []})
                 ultimo_ping = ahora
 
@@ -278,6 +311,9 @@ class Minero:
         ident = msg.get("id")
         result = msg.get("result")
         if ident == 900:
+            if self.ping_enviado:
+                ms = int((time.time() - self.ping_enviado) * 1000)
+                log("PING", "%d ms (cada %d s)" % (ms, self.ping_every), GRIS)
             return                                  # respuesta al ping
         if ident == 1:
             if not result:
