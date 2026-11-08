@@ -260,6 +260,28 @@ no es necesario, pero tampoco se puede subir sin hacerlo.
 
 ## 5. Cómo verificar que quedó arreglado
 
+Los scripts de ejemplo viajan dentro del APK y se copian solos a la carpeta de
+trabajo del usuario la primera vez que abre la app. La ruta es:
+
+```
+/data/user/0/dev.codesnack.linuxterm/files/home/examples/
+```
+
+Y se pueden ejecutar con ruta corta desde la terminal, porque el directorio de
+trabajo ya es `files/home/`:
+
+```bash
+ejemplos                                                  # lista los scripts
+python3 examples/prueba_stratum.py <tu_direccion_btc>      # ruta relativa
+python3 ~/examples/prueba_stratum.py <tu_direccion_btc>    # ruta absoluta
+```
+
+Si en algún momento falta la carpeta, basta con abrir la app de nuevo o escribir
+`ejemplos` en la terminal: `Bootstrap.ensureExtras()` la vuelve a copiar desde
+el APK, sin pisar archivos que ya existan con otra versión.
+
+Pasos de la prueba:
+
 1. Lanzar un script que imprima la hora cada 5 s y mantenga el socket abierto.
 2. Apagar la pantalla y dejarlo **30 minutos**.
 3. Revisar que siga vivo: `jobs` debe mostrar el trabajo en marcha.

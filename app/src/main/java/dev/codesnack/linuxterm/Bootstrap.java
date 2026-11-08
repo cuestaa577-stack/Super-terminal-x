@@ -57,6 +57,9 @@ public final class Bootstrap {
         if (!isArm64()) throw new IOException("Este entorno necesita un teléfono de 64 bits (arm64-v8a).");
         home(ctx).mkdirs();
         new File(ctx.getFilesDir(), "tmp").mkdirs();
+        // Los ejemplos viven en el APK y se copian a ~/examples. Se hace siempre,
+        // también cuando usr/ ya estaba instalado de una versión anterior.
+        ensureExtras(ctx);
         if (isInstalled(ctx)) return;
 
         // Instalación limpia: el paquete trae su propia carpeta "usr/" dentro de files/
@@ -75,6 +78,51 @@ public final class Bootstrap {
         }
         try (FileOutputStream out = new FileOutputStream(new File(usr(ctx), ".version"))) {
             out.write(VERSION.getBytes("UTF-8"));
+        }
+    }
+
+    /** Versión de los ejemplos y utilidades que viajan dentro del APK. */
+    private static final String EXTRAS_VERSION = "1";
+
+    /**
+     * Copia assets/examples/ a la carpeta de trabajo del usuario (~/examples),
+     * para que se puedan ejecutar sin rutas relativas raras:
+     *   python3 ~/examples/prueba_stratum.py <direccion>
+     * Es idempotente: solo reescribe cuando cambia EXTRAS_VERSION, así no pisa
+     * los archivos que el usuario haya editado.
+     */
+    public static void ensureExtras(Context ctx) {
+        File dest = new File(home(ctx), "examples");
+        File marker = new File(dest, ".version");
+        if (marker.isFile()) {
+            try (InputStream in = new java.io.FileInputStream(marker)) {
+                byte[] b = new byte[32];
+                int n = in.read(b);
+                if (n > 0 && new String(b, 0, n, "UTF-8").trim().equals(EXTRAS_VERSION)) return;
+            } catch (IOException ignored) {
+                // Sigue y vuelve a copiar.
+            }
+        }
+        if (!dest.isDirectory() && !dest.mkdirs()) return;
+        try {
+            String[] names = ctx.getAssets().list("examples");
+            if (names == null || names.length == 0) return;
+            for (String name : names) {
+                File out = new File(dest, name);
+                try (InputStream in = ctx.getAssets().open("examples/" + name);
+                     FileOutputStream os = new FileOutputStream(out)) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                }
+                out.setReadable(true, false);
+                out.setExecutable(true, false);
+            }
+            try (FileOutputStream m = new FileOutputStream(marker)) {
+                m.write(EXTRAS_VERSION.getBytes("UTF-8"));
+            }
+        } catch (IOException ignored) {
+            // Un APK sin ejemplos no debe romper el arranque del entorno.
         }
     }
 

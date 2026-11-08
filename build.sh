@@ -17,6 +17,14 @@ done
 
 rm -rf "$OUT" && mkdir -p "$OUT/classes" "$OUT/gen"
 
+echo "0/5 Ejemplos y utilidades dentro del APK"
+# La copia a assets se genera al compilar; el repositorio no guarda duplicados.
+ASSETS_EX="$APP/assets/examples"
+mkdir -p "$ASSETS_EX"
+find "$ASSETS_EX" -maxdepth 1 -name '*.py' -delete 2>/dev/null || true
+cp -f "$HERE"/examples/*.py "$ASSETS_EX/" 2>/dev/null || true
+ls "$ASSETS_EX" 2>/dev/null | sed 's/^/    /'
+
 echo "1/5 Recursos (icono) y manifiesto"
 "$BT/aapt2" compile -o "$OUT/res.zip" --dir "$HERE/app/src/main/res"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$PLATFORM" -R "$OUT/res.zip" \

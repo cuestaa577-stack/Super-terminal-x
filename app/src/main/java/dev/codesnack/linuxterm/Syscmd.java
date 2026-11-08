@@ -28,6 +28,7 @@ public final class Syscmd {
             + "  procs [-m] [N] [filtro]   procesos por CPU (o por memoria con -m)\n"
             + "                            ejemplos: procs 10 | procs -m | procs java\n"
             + "  limpiar                   borra la pantalla\n"
+            + "  ejemplos                  muestra la carpeta ~/examples\n"
             + "  help                      esta ayuda\n"
             + "Cualquier otro comando (ls, ps, cat, df...) se ejecuta en la shell de Android.";
 

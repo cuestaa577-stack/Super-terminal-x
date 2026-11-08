@@ -320,6 +320,10 @@ public class MainActivity extends Activity {
             case "jobs":
                 println(Jobs.list());
                 return;
+            case "ejemplos":
+            case "examples":
+                mostrarEjemplos();
+                return;
             case "log":
                 showLog(args);
                 return;
@@ -678,6 +682,24 @@ public class MainActivity extends Activity {
             println("No se pudo arrancar el trabajo: " + e.getMessage());
         }
     }
+
+    /** Lista los scripts que se copian del APK a ~/examples. */
+    private void mostrarEjemplos() {
+        Bootstrap.ensureExtras(this);
+        java.io.File dir = new java.io.File(Bootstrap.home(this), "examples");
+        java.io.File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            println("Esta versión del APK no trae ejemplos.");
+            return;
+        }
+        println("Ejemplos en " + dir.getAbsolutePath() + ":");
+        for (java.io.File f : files) {
+            if (f.getName().startsWith(".")) continue;
+            println("  " + f.getName());
+        }
+        println("Ejecuta: python3 ~/examples/prueba_stratum.py <tu_direccion_btc>");
+    }
+
 
     private void showLog(String[] args) {
         if (args.length == 0) {
