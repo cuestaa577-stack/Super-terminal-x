@@ -25,12 +25,15 @@ RECONECTABLES = {32, 103, 104, 110}
 
 
 def abrir(host, port):
+    """Conexión con keep-alive estándar.
+
+    Solo SO_KEEPALIVE. Las opciones de bajo nivel (TCP_KEEPIDLE, TCP_KEEPINTVL,
+    TCP_KEEPCNT, TCP_NODELAY) se pasan por IPPROTO_TCP y en el kernel de Android
+    devuelven [Errno 22] Invalid argument, así que no se tocan: el keep-alive
+    del sistema y el mining.ping cada 45 s cubren lo mismo sin romper nada.
+    """
     s = socket.create_connection((host, port), timeout=20)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    for opt, val in (("TCP_KEEPIDLE", 30), ("TCP_KEEPINTVL", 15), ("TCP_KEEPCNT", 4)):
-        if hasattr(socket, opt):
-            s.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
-    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     return s
 
 
