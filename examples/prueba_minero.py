@@ -10,9 +10,11 @@ Red:
   * El nombre de la pool se resuelve UNA vez y se guarda la IP. Asi un fallo
     momentaneo de DNS no tumba el bucle de reconexion (era el "errno 7":
     EAI_NODATA, no un corte de socket).
-  * Ping cada 15 s por defecto, y cada 8 s si la ultima conexion duro menos
+  * Ping cada 10 s por defecto, y cada 8 s si la ultima conexion duro menos
     de un minuto: se adapta solo cuando la red esta inestable. Cada ping
     muestra su ida y vuelta, asi se ve si el enlace se esta cayendo.
+  * Un corte se cierra limpio y se reintenta a los 2 s, sin tocar el hilo de
+    hashing: el contador de nonces sigue donde iba.
   * Cualquier error de red se cierra limpio y se reintenta con espera
     creciente. El hilo que calcula hashes nunca se queda bloqueado.
 
@@ -42,10 +44,11 @@ RESET = "\033[0m"
 
 BASE_TARGET = 0x0000FFFF * (1 << 208)
 
-PING_EVERY = max(5, int(os.environ.get("PRUEBA_PING", "15")))
+PING_EVERY = max(5, int(os.environ.get("PRUEBA_PING", "10")))
 RECV_TIMEOUT = 2.0          # para poder pingear aunque la pool calle
 CONNECT_TIMEOUT = 10.0
 PING_RAPIDO = 8             # cuando la red viene cortando seguido
+PING_ESTABLE = 10           # ritmo normal
 ESPERA_INICIAL = 2
 RESUMEN_EVERY = 15
 LOTE_NONCES = 8192
@@ -111,6 +114,7 @@ class Minero:
         self.ping_every = PING_EVERY
         self.ping_enviado = 0.0
         self.ultima_duracion = 0
+        self.nonce_actual = 0
         self.corriendo = True
 
     # ---------------- red ----------------
@@ -205,8 +209,6 @@ class Minero:
                     self.trabajo = None      # el de antes no sirve
                 self.extranonce2_siguiente = 0
                 self.ping_every = PING_RAPIDO if 0 < self.ultima_duracion < 60 else PING_EVERY
-                if self.ultima_duracion >= 120:
-                    espera = ESPERA_INICIAL   # la red va bien: reintento corto
                 log("CONECTADO", "%s:%s (%s)" % (self.host, self.puerto, ip), VERDE)
                 self.enviar({"id": 1, "method": "mining.subscribe",
                              "params": ["prueba-minero/1.0"]})
@@ -225,6 +227,7 @@ class Minero:
                 if self.conectado:
                     duró = int(time.time() - getattr(self, "inicio_conexion", time.time()))
                     self.ultima_duracion = duró
+                    espera = ESPERA_INICIAL   # habia conexion: reintento corto
                     pista = ""
                     if getattr(e, "errno", None) in (errno.ECONNABORTED, errno.ECONNRESET):
                         pista = " (la red aborto el flujo: cambios de Wi-Fi a datos, "
@@ -256,7 +259,13 @@ class Minero:
             except socket.timeout:
                 datos = None                       # normal: toca pingear
             except (OSError, ConnectionError) as e:
-                log("AVISO", "lectura interrumpida: %s" % self.motivo(e), AMARILLO)
+                if getattr(e, "errno", None) == errno.ECONNABORTED:
+                    log("AVISO", "errno 103: la red aborto el flujo; cierro y reintento "
+                        "en %d s" % ESPERA_INICIAL, AMARILLO)
+                elif isinstance(e, socket.timeout):
+                    continue
+                else:
+                    log("AVISO", "lectura interrumpida: %s" % self.motivo(e), AMARILLO)
                 return
             if datos == b"":
                 return                             # cerrada por la pool
@@ -382,7 +391,7 @@ class Minero:
             if not cabecera:
                 time.sleep(0.2)
                 continue
-            desde = t.get("nonce", 0)
+            desde = self.nonce_actual
             encontrado = None
             for i in range(LOTE_NONCES):
                 nonce = (desde + i) & 0xFFFFFFFF
@@ -391,10 +400,9 @@ class Minero:
                 if int.from_bytes(h, "little") <= target:
                     encontrado = nonce
                     break
+            self.nonce_actual = (desde + LOTE_NONCES) & 0xFFFFFFFF
             with self.trabajo_lock:
                 sigue = self.trabajo is t
-                if sigue:
-                    t["nonce"] = (desde + LOTE_NONCES) & 0xFFFFFFFF
             if encontrado is not None and sigue:
                 self.enviar_share(t, encontrado)
             time.sleep(0.002)      # deja respirar al lector y al procesador
