@@ -522,6 +522,16 @@ public class MainActivity extends Activity {
             case "bg":
                 startJob(rest(line));
                 return;
+            case "minar":
+                if (args.length == 0) {
+                    println("Uso: minar <direccion_btc>");
+                    println("Arranca el minero como trabajo en segundo plano: sigue");
+                    println("aunque salgas de la app. Ver salida: log <n> · lista: jobs");
+                    return;
+                }
+                startJob("python3 examples/prueba_minero.py " + rest(line));
+                println("Se sigue minando al salir de la app. Vuelve y usa: jobs");
+                return;
             case "jobs":
                 println(Jobs.list());
                 return;

@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -31,6 +33,15 @@
             android:exported="false" />
         <service
             android:name=".KeepAliveService"
-            android:exported="false" />
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <!-- specialUse: una sesion de terminal que sigue trabajando en
+                 segundo plano. Sin tipo declarado, Android 14 rechaza el
+                 servicio y el proceso muere al salir de la app. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="sesion de terminal y trabajos largos" />
+        </service>
     </application>
 </manifest>

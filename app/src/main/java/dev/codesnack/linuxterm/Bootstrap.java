@@ -82,7 +82,7 @@ public final class Bootstrap {
     }
 
     /** Versión de los ejemplos y utilidades que viajan dentro del APK. */
-    private static final String EXTRAS_VERSION = "11";
+    private static final String EXTRAS_VERSION = "12";
 
     /**
      * Copia assets/examples/ a la carpeta de trabajo del usuario (~/examples) y

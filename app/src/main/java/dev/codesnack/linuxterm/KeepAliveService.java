@@ -97,8 +97,34 @@ public class KeepAliveService extends Service {
                 .setContentIntent(pi)
                 .setOngoing(true)
                 .build();
-        startForeground(NOTIFICATION_ID, n);
+        promover(n);
         return START_STICKY;
+    }
+
+    /**
+     * Pasa a primer plano declarando el tipo del manifest. En Android 14 el
+     * proceso muere al salir de la app si el servicio no tiene tipo, y es
+     * justo lo que hacia que se cayera al cambiar de aplicacion.
+     */
+    private void promover(Notification n) {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(NOTIFICATION_ID, n,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIFICATION_ID, n,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST);
+            } else {
+                startForeground(NOTIFICATION_ID, n);
+            }
+        } catch (RuntimeException e) {
+            try {
+                startForeground(NOTIFICATION_ID, n);
+            } catch (RuntimeException ignored) {
+                // sin notificacion no hay primer plano; el trabajo sigue
+                // mientras el sistema no recicle el proceso
+            }
+        }
     }
 
     @Override
