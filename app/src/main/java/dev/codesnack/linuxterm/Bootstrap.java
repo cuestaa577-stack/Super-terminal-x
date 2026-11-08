@@ -82,12 +82,14 @@ public final class Bootstrap {
     }
 
     /** Versión de los ejemplos y utilidades que viajan dentro del APK. */
-    private static final String EXTRAS_VERSION = "5";
+    private static final String EXTRAS_VERSION = "6";
 
     /**
-     * Copia assets/examples/ a la carpeta de trabajo del usuario (~/examples),
-     * para que se puedan ejecutar sin rutas relativas raras:
-     *   python3 ~/examples/prueba_stratum.py <direccion>
+     * Copia assets/examples/ a la carpeta de trabajo del usuario (~/examples) y
+     * deja un lanzador de cada script en la raíz de ~ y en usr/bin, para que
+     * funcione desde cualquier ruta inicial:
+     *   python3 prueba_stratum.py <direccion>      (desde ~, sin cd examples)
+     *   prueba_stratum <direccion>                 (desde cualquier carpeta)
      * Es idempotente: solo reescribe cuando cambia EXTRAS_VERSION, así no pisa
      * los archivos que el usuario haya editado.
      */
@@ -118,12 +120,61 @@ public final class Bootstrap {
                 out.setReadable(true, false);
                 out.setExecutable(true, false);
             }
+            instalarLanzadores(ctx, dest);
             try (FileOutputStream m = new FileOutputStream(marker)) {
                 m.write(EXTRAS_VERSION.getBytes("UTF-8"));
             }
         } catch (IOException ignored) {
             // Un APK sin ejemplos no debe romper el arranque del entorno.
         }
+    }
+
+    /**
+     * Deja cada ejemplo ejecutable desde la raíz de ~ y desde usr/bin.
+     *
+     * En ~ se escribe un lanzador con el mismo nombre del script, que llama al
+     * archivo real de ~/examples con los mismos argumentos. Así
+     * `python3 prueba_stratum.py ...` funciona recién abierto el terminal, sin
+     * `cd` previo, y sigue habiendo una sola copia del código.
+     */
+    private static void instalarLanzadores(Context ctx, File ejemplos) {
+        String[] scripts = ejemplos.list();
+        if (scripts == null) return;
+        File bin = new File(usr(ctx), "bin");
+        bin.mkdirs();
+        for (String script : scripts) {
+            if (!script.endsWith(".py") || script.equals(".version")) continue;
+            String base = script.substring(0, script.length() - 3);
+
+            String lanzador = "#!/usr/bin/env python3\n"
+                    + "# Lanzador: ejecuta el ejemplo real de ~/examples sin tener que entrar ahí.\n"
+                    + "import os, runpy, sys\n\n"
+                    + "_ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
+                    + "\"examples\", \"" + script + "\")\n"
+                    + "if not os.path.isfile(_ruta):\n"
+                    + "    sys.exit(\"no encuentro examples/" + script
+                    + "; reinstala la app o revisa 'ejemplos'\")\n"
+                    + "sys.argv[0] = _ruta\n"
+                    + "runpy.run_path(_ruta, run_name=\"__main__\")\n";
+
+            escribir(new File(home(ctx), script), lanzador);
+
+            String atajo = "#!/system/bin/sh\n"
+                    + "# Atajo: ejecuta ~/examples/" + script + " desde cualquier carpeta.\n"
+                    + "exec python3 \"$HOME/examples/" + script + "\" \"$@\"\n";
+            escribir(new File(bin, base), atajo);
+        }
+    }
+
+    /** Crea o reemplaza un archivo de texto pequeño. */
+    private static void escribir(File destino, String texto) {
+        try (FileOutputStream out = new FileOutputStream(destino)) {
+            out.write(texto.getBytes("UTF-8"));
+        } catch (IOException ignored) {
+            return;   // un extra que no se pudo escribir no debe romper el arranque
+        }
+        destino.setReadable(true, false);
+        destino.setExecutable(true, false);
     }
 
     /** Variables de entorno de los procesos del entorno Linux. */
