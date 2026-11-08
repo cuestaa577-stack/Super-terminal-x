@@ -275,100 +275,16 @@ def resumen():
     log("RESUMEN", " · ".join(partes))
 
 
-# --------------------------------------------------- validar la cuenta BTC
-
-BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-
-def _polimod(valores):
-    generador = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
-    chk = 1
-    for valor in valores:
-        alto = chk >> 25
-        chk = ((chk & 0x1FFFFFF) << 5) ^ valor
-        for i in range(5):
-            if (alto >> i) & 1:
-                chk ^= generador[i]
-    return chk
-
-
-def _bech32_valida(direccion):
-    """True si es una dirección bech32 con checksum correcto."""
-    pos = direccion.rfind("1")
-    if pos < 1 or len(direccion) - pos < 7:
-        return False
-    hrp = direccion[:pos]
-    if hrp not in ("bc", "tb"):
-        return False
-    datos = direccion[pos + 1:]
-    if any(c not in BECH32 for c in datos):
-        return False
-    valores = [BECH32.index(c) for c in datos]
-    expandido = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
-    return _polimod(expandido + valores) == 1
-
-
-def _base58_valida(direccion):
-    """True si es una dirección base58 (1... o 3...) con checksum correcto."""
-    import hashlib
-
-    numero = 0
-    for c in direccion:
-        if c not in B58:
-            return False
-        numero = numero * 58 + B58.index(c)
-    crudo = numero.to_bytes((numero.bit_length() + 7) // 8, "big")
-    crudo = b"\0" * (len(direccion) - len(direccion.lstrip("1"))) + crudo
-    if len(crudo) != 25:
-        return False
-    doble = hashlib.sha256(hashlib.sha256(crudo[:21]).digest()).digest()
-    return doble[:4] == crudo[21:]
-
-
-def normalizar_cuenta(cuenta):
-    """Devuelve (cuenta_para_authorize, aviso).
-
-    Bech32 (bc1...) solo admite todo en minúsculas o todo en mayúsculas; si se
-    mezclan, la pool responde False. Base58 (1..., 3...) distingue mayúsculas
-    de minúsculas, así que ahí no se toca la caja.
-    El worker que traiga la cadena se respeta tal cual: no se añade ninguno.
-    """
-    cuenta = cuenta.strip()
-    if not cuenta:
-        return cuenta, "la cuenta está vacía"
-
-    direccion, punto, worker = cuenta.partition(".")
-    minuscula = direccion.lower()
-    avisos = []
-
-    if minuscula.startswith(("bc1", "tb1")):
-        if direccion != minuscula and direccion != direccion.upper():
-            avisos.append("la dirección mezclaba mayúsculas y minúsculas; se envía "
-                          "en minúsculas, que es el formato que acepta bech32")
-        cuenta = minuscula + (punto + worker if punto else "")
-        if not _bech32_valida(minuscula):
-            avisos.append("el checksum de la dirección bech32 no cuadra: "
-                          "revisa que esté completa y sin letras cambiadas")
-    elif not _base58_valida(direccion):
-        avisos.append("la dirección no parece una dirección BTC válida "
-                      "(bech32 bc1... o base58 1.../3...)")
-
-    return cuenta, "; ".join(avisos) if avisos else None
-
-
 # --------------------------------------------------------------------- main
 
 def main():
     if len(sys.argv) < 2:
         print("uso: prueba_stratum.py <direccion_btc> [host] [puerto]")
         return 2
-    usuario, aviso = normalizar_cuenta(sys.argv[1])
+    usuario = sys.argv[1].strip()
     if not usuario:
         print("uso: prueba_stratum.py <direccion_btc> [host] [puerto]")
         return 2
-    if aviso:
-        log("AVISO", aviso)
     host = sys.argv[2] if len(sys.argv) > 2 else "solo.ckpool.org"
     puerto = int(sys.argv[3]) if len(sys.argv) > 3 else 3333
 
@@ -392,7 +308,6 @@ def main():
             enviar(s, {"id": nuevo_id(), "method": "mining.authorize",
                        "params": [usuario, "x"]}, "autorizacion")
             log("CONECTADO", "%s:%s como %s" % (host, puerto, usuario))
-            log("CUENTA", "authorize con %r" % usuario)
             intento = 0
             s.settimeout(5)
             buffer = b""
