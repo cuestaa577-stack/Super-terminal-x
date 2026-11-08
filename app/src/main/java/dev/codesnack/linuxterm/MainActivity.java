@@ -218,6 +218,9 @@ public class MainActivity extends Activity {
         titulo.setTextSize(11);
         barra.addView(titulo, new LinearLayout.LayoutParams(0, -2, 1f));
 
+        barra.addView(botonZoom("A-", () -> term.zoomMenos()));
+        barra.addView(botonZoom("A+", () -> term.zoomMas()));
+
         TextView menu = new TextView(this);
         menu.setText("☰ Menú");
         menu.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -228,6 +231,21 @@ public class MainActivity extends Activity {
         menu.setOnClickListener(this::menuTerminal);
         barra.addView(menu);
         return barra;
+    }
+
+    /** Botón pequeño de zoom para la cabecera de la terminal. */
+    private TextView botonZoom(String texto, Runnable accion) {
+        TextView b = new TextView(this);
+        b.setText(texto);
+        b.setTypeface(android.graphics.Typeface.MONOSPACE);
+        b.setTextColor(Color.rgb(240, 244, 248));
+        b.setTextSize(13);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(10), dp(4), dp(10), dp(4));
+        b.setClickable(true);
+        b.setFocusable(false);
+        b.setOnClickListener(v -> accion.run());
+        return b;
     }
 
     /** Menú de la terminal: consola de comandos, diagnóstico, entorno, ejemplos. */
