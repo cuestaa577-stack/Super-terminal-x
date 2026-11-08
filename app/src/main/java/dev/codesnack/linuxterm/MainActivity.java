@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private EditText input;
     private Button stopButton;
     private View inputRow;
+    private KeyBar keyBar;
     private LinearLayout termPanel;
     private TerminalView term;
     private PtySession session;
@@ -112,12 +113,10 @@ public class MainActivity extends Activity {
                 if (session != null) session.write(seq);
             }
         });
-        KeyBar keyBar = new KeyBar(this, term);
         termPanel = new LinearLayout(this);
         termPanel.setOrientation(LinearLayout.VERTICAL);
         termPanel.setVisibility(View.GONE);
         termPanel.addView(term, new LinearLayout.LayoutParams(-1, 0, 1f));
-        termPanel.addView(keyBar, new LinearLayout.LayoutParams(-1, -2));
         root.addView(termPanel, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         monitorView = new TextView(this);
@@ -189,12 +188,113 @@ public class MainActivity extends Activity {
 
         root.addView(row, new LinearLayout.LayoutParams(-1, -2));
         inputRow = row;
+
+        // Barra de teclas siempre visible, pegada al teclado. En la consola
+        // mueve el cursor y el historial; dentro de la terminal, manda al PTY.
+        keyBar = new KeyBar(this, teclas);
+        root.addView(keyBar, new LinearLayout.LayoutParams(-1, -2));
+
         setContentView(root);
 
         println("Terminal Linux " + versionInstalada() + " — escribe help para ver los comandos.");
         println(Syscmd.HELP);
         println("");
         installEnvironment();
+    }
+
+    /** Qué hace cada tecla de la barra según dónde esté el usuario. */
+    private final KeyBar.Objetivo teclas = new KeyBar.Objetivo() {
+        @Override
+        public boolean terminalActivo() {
+            return session != null && termPanel.getVisibility() == View.VISIBLE;
+        }
+
+        @Override
+        public void navegar(String tecla) {
+            if (terminalActivo()) {
+                term.sendKey(secuencia(tecla));
+                return;
+            }
+            // Consola de comandos: mover el cursor, el historial o la salida.
+            int largo = input.getText().length();
+            int pos = Math.max(0, Math.min(largo, input.getSelectionStart()));
+            switch (tecla) {
+                case "A":
+                    recall(-1);
+                    break;
+                case "B":
+                    recall(1);
+                    break;
+                case "C":
+                    input.setSelection(Math.min(largo, pos + 1));
+                    break;
+                case "D":
+                    input.setSelection(Math.max(0, pos - 1));
+                    break;
+                case "H":
+                    input.setSelection(0);
+                    break;
+                case "F":
+                    input.setSelection(largo);
+                    break;
+                case "5":
+                    scroll.scrollBy(0, -scroll.getHeight() * 3 / 4);
+                    break;
+                case "6":
+                    scroll.scrollBy(0, scroll.getHeight() * 3 / 4);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        @Override
+        public void control(String tecla) {
+            if (!terminalActivo()) return;   // TAB y ESC no significan nada aquí
+            term.sendKey("TAB".equals(tecla) ? "\t" : "\u001b");
+        }
+
+        @Override
+        public void texto(String texto) {
+            if (terminalActivo()) {
+                term.sendText(texto);
+                return;
+            }
+            int pos = Math.max(0, input.getSelectionStart());
+            input.getText().insert(pos, texto);
+        }
+
+        @Override
+        public void alternarCtrl() {
+            if (terminalActivo()) term.toggleCtrl();
+        }
+
+        @Override
+        public void alternarAlt() {
+            if (terminalActivo()) term.toggleAlt();
+        }
+
+        @Override
+        public boolean ctrlActivo() {
+            return terminalActivo() && term.isCtrlSticky();
+        }
+
+        @Override
+        public boolean altActivo() {
+            return terminalActivo() && term.isAltSticky();
+        }
+    };
+
+    /** Secuencia ANSI de una tecla de navegación, según el modo de cursor. */
+    private String secuencia(String tecla) {
+        switch (tecla) {
+            case "5":
+                return "\u001b[5~";
+            case "6":
+                return "\u001b[6~";
+            default:
+                return (term.appCursorKeys() ? "\u001bO" : "\u001b[") + tecla;
+        }
     }
 
     /** Versión real del APK instalado, para que la cabecera no mienta. */
