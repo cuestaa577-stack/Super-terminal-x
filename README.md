@@ -1,6 +1,17 @@
 # Super-terminal-x
 Código abierto
 
+## Descargar el APK
+
+Enlace permanente, siempre apunta a la última versión publicada:
+
+**https://github.com/cuestaa577-stack/Super-terminal-x/releases/latest/download/Terminal-Linux.apk**
+
+Cada versión conserva además su archivo propio en
+`https://github.com/cuestaa577-stack/Super-terminal-x/releases/tag/vX.Y.Z`,
+por si hace falta volver a una anterior. Todas las versiones van firmadas con
+la misma clave de depuración, así que se instalan encima sin desinstalar.
+
 ## Novedades
 
 - **Terminal con emulación de pantalla:** `nano`, `vim`, `vi`, `less`, `top`, `htop`, `python3` y `consola` se abren a pantalla completa dentro de un pseudoterminal real (`assets/ptyrun.py`) con emulador VT100/xterm (`TerminalEmulator.java`, `TerminalView.java`). Atrás cierra el programa.
