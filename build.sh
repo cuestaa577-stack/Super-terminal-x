@@ -29,7 +29,7 @@ echo "1/5 Recursos (icono) y manifiesto"
 "$BT/aapt2" compile -o "$OUT/res.zip" --dir "$HERE/app/src/main/res"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$PLATFORM" -R "$OUT/res.zip" \
   -A "$APP/assets" --manifest "$APP/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 28 \
-  --version-code 5 --version-name 1.6.0
+  --version-code 6 --version-name 1.6.1
 
 echo "2/5 Compilando Java"
 javac --release 8 -g -encoding UTF-8 -Xlint:-options -cp "$PLATFORM" \

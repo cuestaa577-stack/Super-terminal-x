@@ -29,6 +29,7 @@ public final class Syscmd {
             + "                            ejemplos: procs 10 | procs -m | procs java\n"
             + "  limpiar                   borra la pantalla\n"
             + "  ejemplos                  muestra la carpeta ~/examples\n"
+            + "  consola                   terminal a pantalla completa con barra de teclas\n"
             + "  help                      esta ayuda\n"
             + "Cualquier otro comando (ls, ps, cat, df...) se ejecuta en la shell de Android.";
 
