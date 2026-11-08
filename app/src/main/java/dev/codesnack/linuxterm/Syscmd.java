@@ -31,6 +31,7 @@ public final class Syscmd {
             + "  bateria                   quita la optimización de batería de la app\n"
             + "  ejemplos                  muestra la carpeta ~/examples\n"
             + "  consola                   terminal a pantalla completa con barra de teclas\n"
+            + "                            (la app arranca ahí; ☰ Menú abre diagnóstico, entorno y ejemplos)\n"
             + "  help                      esta ayuda\n"
             + "Cualquier otro comando (ls, ps, cat, df...) se ejecuta en la shell de Android.";
 

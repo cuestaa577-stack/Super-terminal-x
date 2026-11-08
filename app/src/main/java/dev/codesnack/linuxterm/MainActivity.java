@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
         termPanel = new LinearLayout(this);
         termPanel.setOrientation(LinearLayout.VERTICAL);
         termPanel.setVisibility(View.GONE);
+        termPanel.addView(cabeceraTerminal(), new LinearLayout.LayoutParams(-1, -2));
         termPanel.addView(term, new LinearLayout.LayoutParams(-1, 0, 1f));
         root.addView(termPanel, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -200,6 +201,87 @@ public class MainActivity extends Activity {
         println(Syscmd.HELP);
         println("");
         installEnvironment();
+    }
+
+    /** Franja superior de la terminal con el botón de menú. */
+    private View cabeceraTerminal() {
+        LinearLayout barra = new LinearLayout(this);
+        barra.setOrientation(LinearLayout.HORIZONTAL);
+        barra.setGravity(Gravity.CENTER_VERTICAL);
+        barra.setBackgroundColor(Color.rgb(30, 32, 36));
+        barra.setPadding(dp(8), dp(2), dp(4), dp(2));
+
+        TextView titulo = new TextView(this);
+        titulo.setText("terminal");
+        titulo.setTypeface(android.graphics.Typeface.MONOSPACE);
+        titulo.setTextColor(Color.rgb(130, 138, 148));
+        titulo.setTextSize(11);
+        barra.addView(titulo, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView menu = new TextView(this);
+        menu.setText("☰ Menú");
+        menu.setTypeface(android.graphics.Typeface.MONOSPACE);
+        menu.setTextColor(Color.rgb(240, 244, 248));
+        menu.setTextSize(12);
+        menu.setPadding(dp(10), dp(4), dp(10), dp(4));
+        menu.setClickable(true);
+        menu.setOnClickListener(this::menuTerminal);
+        barra.addView(menu);
+        return barra;
+    }
+
+    /** Menú de la terminal: consola de comandos, diagnóstico, entorno, ejemplos. */
+    private void menuTerminal(View ancla) {
+        android.widget.PopupMenu popup = new android.widget.PopupMenu(this, ancla);
+        popup.getMenu().add(0, 1, 0, "Consola de comandos");
+        popup.getMenu().add(0, 2, 1, "Diagnóstico");
+        popup.getMenu().add(0, 3, 2, "Estado del entorno");
+        popup.getMenu().add(0, 4, 3, "Ejemplos (~/examples)");
+        popup.getMenu().add(0, 5, 4, "Quitar optimización de batería");
+        popup.getMenu().add(0, 6, 5, "Nueva terminal");
+        popup.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1:
+                    irAConsola(null);
+                    return true;
+                case 2:
+                    irAConsola("diag");
+                    return true;
+                case 3:
+                    irAConsola("entorno");
+                    return true;
+                case 4:
+                    irAConsola("ejemplos");
+                    return true;
+                case 5:
+                    irAConsola("bateria");
+                    return true;
+                case 6:
+                    irAConsola(null);
+                    ui.postDelayed(this::abrirTerminalInicial, 200);
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        popup.show();
+    }
+
+    /** Vuelve a la consola de comandos y, si se pide, ejecuta algo allí. */
+    private void irAConsola(final String cmd) {
+        if (session != null) {
+            session.close();
+            session = null;
+        }
+        endTerminal();
+        if (cmd != null) ui.postDelayed(() -> dispatch(cmd), 250);
+    }
+
+    /** Abre la terminal interactiva en cuanto el entorno está listo. */
+    private void abrirTerminalInicial() {
+        if (session != null) return;
+        if (!envReady && !Bootstrap.isInstalled(this)) return;
+        openTerminal(shellCommand());
     }
 
     /** Qué hace cada tecla de la barra según dónde esté el usuario. */
@@ -316,7 +398,10 @@ public class MainActivity extends Activity {
             try {
                 Bootstrap.ensureInstalled(this);
                 envReady = true;
-                ui.post(() -> println("Entorno listo: python3, pip, vim, nano, sqlite3. Escribe entorno."));
+                ui.post(() -> {
+                    println("Entorno listo: python3, pip, vim, nano, sqlite3.");
+                    abrirTerminalInicial();
+                });
             } catch (Exception e) {
                 ui.post(() -> println("No se pudo preparar el entorno: " + e.getMessage()));
             }
