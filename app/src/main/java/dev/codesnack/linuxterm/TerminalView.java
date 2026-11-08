@@ -7,6 +7,7 @@ import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.text.InputType;
 import android.view.KeyEvent;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -67,6 +68,10 @@ public class TerminalView extends View {
     private float textSp;
     private float scaleStartSp;
     private ScaleGestureDetector scaleDetector;
+    private GestureDetector gestos;
+    private boolean dobleToque;
+    /** Salto de cada toque en el zoom. */
+    private static final float PASO_SP = 2f;
 
     public TerminalView(Context context) {
         super(context);
@@ -89,7 +94,30 @@ public class TerminalView extends View {
                         return true;
                     }
                 });
+        gestos = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                dobleToque = true;
+                zoomCiclo();
+                return true;
+            }
+        });
         emu = new TerminalEmulator(24, 80, this::sendRaw);
+    }
+
+    /** Un toque doble recorre los tamaños: 13, 16, 19, 22 y vuelve a 13. */
+    void zoomCiclo() {
+        float siguiente = textSp + 3f;
+        if (siguiente > MAX_SP - 0.01f) siguiente = MIN_SP;
+        fijarSp(siguiente, true);
+    }
+
+    void zoomMas() {
+        fijarSp(textSp + PASO_SP, true);
+    }
+
+    void zoomMenos() {
+        fijarSp(textSp - PASO_SP, true);
     }
 
 
@@ -294,6 +322,7 @@ public class TerminalView extends View {
         // El pellizco va antes que el desplazamiento: con dos dedos no se hace
         // scroll ni se abre el teclado al soltar.
         scaleDetector.onTouchEvent(event);
+        if (gestos.onTouchEvent(event)) return true;
         float y = event.getY();
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_POINTER_DOWN:
@@ -323,6 +352,10 @@ public class TerminalView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP:
+                if (dobleToque) {
+                    dobleToque = false;
+                    return true;
+                }
                 if (!touchMoved) {
                     requestFocus();
                     android.view.inputmethod.InputMethodManager imm =
