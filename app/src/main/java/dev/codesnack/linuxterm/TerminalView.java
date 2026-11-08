@@ -54,21 +54,60 @@ public class TerminalView extends View {
     private boolean touchMoved;
 
     /**
-     * Tamaño de texto fijo. No hay zoom: ni pellizco, ni doble toque, ni
-     * botones. Se mide en dp, no en sp, para que la escala de fuente del
-     * sistema tampoco lo cambie.
+     * Tamaño de texto por defecto, en dp (no en sp, para que la escala de
+     * fuente del sistema no lo altere). El zoom se hace solo con dos dedos:
+     * separarlos agranda la letra y juntarlos la reduce. No hay botones ni
+     * doble toque, y el tamaño elegido se recuerda entre sesiones.
      */
     static final float TEXTO_DP = 13f;
+    private static final float MIN_SP = 9f;
+    private static final float MAX_SP = 30f;
 
-    private final float textSp = TEXTO_DP;
+    private final android.content.SharedPreferences prefs;
+    private final ScaleGestureDetector escala;
+    private float textSp = TEXTO_DP;
+    private boolean pellizcando;
 
     public TerminalView(Context context) {
         super(context);
         setFocusable(true);
         setFocusableInTouchMode(true);
         paint.setTypeface(Typeface.MONOSPACE);
+        prefs = context.getSharedPreferences("terminal", Context.MODE_PRIVATE);
+        textSp = prefs.getFloat("texto_dp", TEXTO_DP);
+        escala = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScaleBegin(ScaleGestureDetector detector) {
+                pellizcando = true;
+                return true;
+            }
+
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                return cambiarTexto(textSp * detector.getScaleFactor(), true);
+            }
+        });
+        escala.setQuickScaleEnabled(false);
         aplicarMetricas();
         emu = new TerminalEmulator(24, 80, this::sendRaw);
+    }
+
+    /**
+     * Cambia el tamaño de la letra, recalcula celdas y avisa al PTY de las
+     * filas y columnas nuevas. Devuelve true si hubo cambio real.
+     */
+    private boolean cambiarTexto(float nuevo, boolean guardar) {
+        float valor = Math.max(MIN_SP, Math.min(MAX_SP, nuevo));
+        if (Math.abs(valor - textSp) < 0.05f) return false;
+        textSp = valor;
+        aplicarMetricas();
+        if (guardar) prefs.edit().putFloat("texto_dp", textSp).apply();
+        lastRows = -1;      // fuerza recalcular filas y columnas
+        lastCols = -1;
+        scrollOffset = 0;
+        resizeToView();
+        invalidate();
+        return true;
     }
 
     private float sp(float v) {
@@ -243,6 +282,16 @@ public class TerminalView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         float y = event.getY();
+        escala.onTouchEvent(event);
+        if (pellizcando) {
+            // Dos dedos: solo zoom. Al levantar, no se abre el teclado.
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                pellizcando = false;
+            }
+            touchMoved = true;
+            return true;
+        }
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_POINTER_DOWN:
                 touchMoved = true;

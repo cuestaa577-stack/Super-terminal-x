@@ -284,7 +284,7 @@ public class MainActivity extends Activity {
         if (session != null) return;
         if (!envReady && !Bootstrap.isInstalled(this)) return;
         Bootstrap.asegurarBienvenida(this);
-        openTerminal(shellCommand(true));
+        openTerminal(shellCommand(), Bootstrap.leerBienvenida(this));
     }
 
     /** Qué hace cada tecla de la barra según dónde esté el usuario. */
@@ -799,22 +799,20 @@ public class MainActivity extends Activity {
 
     /** Shell interactiva del entorno Linux (bash si está instalado, si no sh). */
     private String shellCommand() {
-        return shellCommand(false);
-    }
-
-    /**
-     * Comando de arranque de la shell. Con bienvenida, primero imprime
-     * ~/.bienvenida y luego cede el control a la shell interactiva, para que el
-     * texto quede arriba del todo y no se mezcle con el prompt.
-     */
-    private String shellCommand(boolean conBienvenida) {
-        String shell = new File(Bootstrap.usr(this), "bin/bash").exists() ? "bash -i" : "sh -i";
-        if (!conBienvenida || !Bootstrap.bienvenida(this).isFile()) return shell;
-        return "sh -c 'cat \"$HOME/.bienvenida\"; exec " + shell + "'";
+        return new File(Bootstrap.usr(this), "bin/bash").exists() ? "bash -i" : "sh -i";
     }
 
     /** Abre un programa interactivo a pantalla completa: se inicia cuando la pantalla conoce su tamaño. */
     private void openTerminal(String cmd) {
+        openTerminal(cmd, null);
+    }
+
+    /**
+     * Abre un programa interactivo. El cartel de bienvenida, si lo hay, se
+     * escribe en la pantalla antes de lanzar el PTY: así queda arriba del
+     * prompt y la shell arranca exactamente igual que siempre.
+     */
+    private void openTerminal(String cmd, String bienvenida) {
         if (!envReady && !Bootstrap.isInstalled(this)) {
             println("El entorno todavía se está preparando. Espera un momento.");
             return;
@@ -828,6 +826,9 @@ public class MainActivity extends Activity {
         inputRow.setVisibility(View.GONE);
         termPanel.setVisibility(View.VISIBLE);
         term.requestFocus();
+        if (bienvenida != null && !bienvenida.isEmpty()) {
+            term.feed(bienvenida.replace("\n", "\r\n"));
+        }
         if (term.rows() > 1 && term.cols() > 1) startPending();
     }
 

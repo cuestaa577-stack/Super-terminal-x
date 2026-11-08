@@ -204,6 +204,21 @@ public final class Bootstrap {
         return new File(home(ctx), ".bienvenida");
     }
 
+    /** Texto de ~/.bienvenida, o null si no se puede leer. */
+    public static String leerBienvenida(Context ctx) {
+        File f = bienvenida(ctx);
+        if (!f.isFile()) return null;
+        try {
+            byte[] b = new byte[(int) Math.min(8192, f.length())];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                int n = in.read(b);
+                return n > 0 ? new String(b, 0, n, "UTF-8") : null;
+            }
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     /** Crea ~/.bienvenida si no existe. Nunca pisa uno editado por el usuario. */
     public static void asegurarBienvenida(Context ctx) {
         File f = bienvenida(ctx);
