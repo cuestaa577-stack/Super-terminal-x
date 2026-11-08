@@ -350,6 +350,14 @@ public class MainActivity extends Activity {
 
         @Override
         public void control(String tecla) {
+            if ("ENTER".equals(tecla)) {
+                if (terminalActivo()) {
+                    term.enviarEnter();
+                } else {
+                    submit();          // en la consola de comandos, ejecuta la línea
+                }
+                return;
+            }
             if (!terminalActivo()) return;   // TAB y ESC no significan nada aquí
             term.sendKey("TAB".equals(tecla) ? "\t" : "\u001b");
         }

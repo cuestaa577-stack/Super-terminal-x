@@ -15,9 +15,17 @@ final class TerminalInputConnection extends BaseInputConnection {
 
     @Override
     public boolean commitText(CharSequence text, int newCursorPosition) {
-        String s = text.toString();
-        if (s.equals("\n")) s = "\r";
+        // Algunos teclados mandan \n al pulsar su tecla de envío: en el PTY
+        // eso es un salto de línea, así que se convierte en retorno de carro.
+        String s = text.toString().replace("\n", "\r");
         term.sendText(s);
+        return true;
+    }
+
+    /** Botón de envío / flecha del teclado virtual: ejecuta la línea. */
+    @Override
+    public boolean performEditorAction(int actionId) {
+        term.enviarEnter();
         return true;
     }
 
@@ -30,6 +38,11 @@ final class TerminalInputConnection extends BaseInputConnection {
     @Override
     public boolean sendKeyEvent(KeyEvent event) {
         if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                || event.getKeyCode() == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            term.enviarEnter();
+            return true;
+        }
         return term.onKeyDown(event.getKeyCode(), event);
     }
 }

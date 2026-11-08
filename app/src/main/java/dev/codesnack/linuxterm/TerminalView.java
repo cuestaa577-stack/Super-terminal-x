@@ -375,9 +375,21 @@ public class TerminalView extends View {
 
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        outAttrs.inputType = InputType.TYPE_NULL;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NONE;
+        // Texto normal para que el teclado muestre su tecla de acción, y
+        // IME_ACTION_SEND para que la flecha de la esquina ejecute la línea.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
+        outAttrs.imeOptions = EditorInfo.IME_ACTION_SEND
+                | EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                | EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        outAttrs.initialSelStart = 0;
+        outAttrs.initialSelEnd = 0;
         return new TerminalInputConnection(this);
+    }
+
+    /** Enter del teclado virtual y de la barra: retorno de carro al PTY. */
+    void enviarEnter() {
+        sendKey("\r");
     }
 
     @Override
