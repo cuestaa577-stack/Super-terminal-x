@@ -934,7 +934,8 @@ public class MainActivity extends Activity {
             if (f.getName().startsWith(".")) continue;
             println("  " + f.getName());
         }
-        println("Ejecuta: python3 ~/examples/prueba_stratum.py <tu_direccion_btc>");
+        println("Probar el socket:  python3 ~/examples/prueba_stratum.py <direccion_btc>");
+        println("Minar de verdad:   python3 ~/examples/prueba_minero.py <direccion_btc>");
     }
 
     private void pedirSinOptimizacion() {
