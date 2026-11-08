@@ -5,7 +5,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SDK="${ANDROID_HOME:-/home/user/android-sdk}"
-BT="$SDK/build-tools/34.0.0"
+BT="$SDK/build-tools/35.0.0"
 PLATFORM="$SDK/platforms/android-34/android.jar"
 OUT="$HERE/build"
 APP="$HERE/app/src/main"
@@ -24,7 +24,7 @@ echo "1/5 Recursos (icono) y manifiesto"
   --version-code 1 --version-name 1.0
 
 echo "2/5 Compilando Java"
-javac --release 8 -encoding UTF-8 -Xlint:-options -cp "$PLATFORM" \
+javac --release 8 -g -encoding UTF-8 -Xlint:-options -cp "$PLATFORM" \
   -d "$OUT/classes" $(find "$APP/java" -name '*.java')
 
 echo "3/5 Convirtiendo a DEX"

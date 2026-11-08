@@ -12,13 +12,24 @@ como código de salida de este script.
 import fcntl
 import os
 import pty
+import re
 import select
 import struct
 import sys
 import termios
 
-LINES = 40
-COLUMNS = 120
+LINES = int(os.environ.get("CS_ROWS", "40"))
+COLUMNS = int(os.environ.get("CS_COLS", "120"))
+
+# La app avisa del tamaño de pantalla con \0R<filas>;<columnas>\0 por la entrada.
+RESIZE = re.compile(rb"\x00R(\d+);(\d+)\x00")
+
+
+def set_size(fd, rows, cols):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        pass
 
 
 def main():
@@ -39,11 +50,8 @@ def main():
             sys.stderr.write("No se pudo ejecutar la shell: %s\n" % e)
             os._exit(127)
 
-    # Tamaño de pantalla razonable para editores de pantalla completa.
-    try:
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", LINES, COLUMNS, 0, 0))
-    except OSError:
-        pass
+    # Tamaño de pantalla inicial (la app lo puede cambiar después).
+    set_size(master, LINES, COLUMNS)
 
     out = sys.stdout.buffer
     stdin_open = True
@@ -61,8 +69,12 @@ def main():
             if not data:
                 stdin_open = False
             else:
+                for m in RESIZE.finditer(data):
+                    set_size(master, int(m.group(1)), int(m.group(2)))
+                data = RESIZE.sub(b"", data)
                 try:
-                    os.write(master, data)
+                    if data:
+                        os.write(master, data)
                 except OSError:
                     stdin_open = False
 

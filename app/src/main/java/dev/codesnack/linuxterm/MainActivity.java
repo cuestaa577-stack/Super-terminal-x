@@ -46,6 +46,11 @@ public class MainActivity extends Activity {
     private TextView monitorView;
     private EditText input;
     private Button stopButton;
+    private View inputRow;
+    private LinearLayout termPanel;
+    private TerminalView term;
+    private PtySession session;
+    private String pendingCmd;
     private Runnable monitorTick;
     private int monitorSeconds = 0;
     private final List<String> history = new ArrayList<>();
@@ -64,6 +69,9 @@ public class MainActivity extends Activity {
             + "  servidor parar      detener el servidor\n"
             + "  archivos            explorador y editor de la carpeta de inicio\n"
             + "  editar archivo.py   abrir un archivo en el editor táctil\n"
+            + "  consola             shell interactiva a pantalla completa\n"
+            + "  nano / vim / less / top / python3 (sin archivo)  abren el programa a pantalla completa\n"
+            + "                      (barra de teclas: ESC, TAB, CTRL, ALT, flechas; Atrás lo cierra)\n"
             + "  bg <comando>        ejecutar en segundo plano (sigue aunque termine el comando)\n"
             + "  jobs                ver los trabajos en segundo plano\n"
             + "  log <n>             ver la salida del trabajo n\n"
@@ -90,6 +98,27 @@ public class MainActivity extends Activity {
         scroll = new ScrollView(this);
         scroll.addView(output);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        term = new TerminalView(this);
+        term.setListener(new TerminalView.Listener() {
+            @Override
+            public void onSize(int rows, int cols) {
+                if (session != null) session.resize(rows, cols);
+                else if (pendingCmd != null) startPending();
+            }
+
+            @Override
+            public void onInput(String seq) {
+                if (session != null) session.write(seq);
+            }
+        });
+        KeyBar keyBar = new KeyBar(this, term);
+        termPanel = new LinearLayout(this);
+        termPanel.setOrientation(LinearLayout.VERTICAL);
+        termPanel.setVisibility(View.GONE);
+        termPanel.addView(term, new LinearLayout.LayoutParams(-1, 0, 1f));
+        termPanel.addView(keyBar, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(termPanel, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         monitorView = new TextView(this);
         monitorView.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -159,6 +188,7 @@ public class MainActivity extends Activity {
         row.addView(stopButton);
 
         root.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        inputRow = row;
         setContentView(root);
 
         println("Terminal Linux " + Syscmd.VERSION + " — escribe help para ver los comandos.");
@@ -232,7 +262,28 @@ public class MainActivity extends Activity {
                 probe(args);
                 return;
             case "python":
-                runShell("python3 " + rest(line));
+                if (args.length == 0) openTerminal("python3");
+                else runShell("python3 " + rest(line));
+                return;
+            case "python3":
+            case "sqlite3":
+            case "bash":
+            case "sh":
+                if (args.length == 0) openTerminal(line);
+                else runShell(line);
+                return;
+            case "consola":
+            case "terminal":
+                openTerminal(shellCommand());
+                return;
+            case "nano":
+            case "vim":
+            case "vi":
+            case "nvim":
+            case "less":
+            case "top":
+            case "htop":
+                openTerminal(line);
                 return;
             case "pip":
                 runShell("python3 -m pip " + rest(line));
@@ -520,6 +571,83 @@ public class MainActivity extends Activity {
         int n;
         while ((n = in.read(tmp)) > 0) buf.write(tmp, 0, n);
         return buf.toByteArray();
+    }
+
+    /** Shell interactiva del entorno Linux (bash si está instalado, si no sh). */
+    private String shellCommand() {
+        return new File(Bootstrap.usr(this), "bin/bash").exists() ? "bash -i" : "sh -i";
+    }
+
+    /** Abre un programa interactivo a pantalla completa: se inicia cuando la pantalla conoce su tamaño. */
+    private void openTerminal(String cmd) {
+        if (!envReady && !Bootstrap.isInstalled(this)) {
+            println("El entorno todavía se está preparando. Espera un momento.");
+            return;
+        }
+        if (session != null && session.isRunning()) {
+            println("Ya hay un programa interactivo abierto. Sal de él (o pulsa Atrás) para abrir otro.");
+            return;
+        }
+        pendingCmd = cmd;
+        scroll.setVisibility(View.GONE);
+        inputRow.setVisibility(View.GONE);
+        termPanel.setVisibility(View.VISIBLE);
+        term.requestFocus();
+        if (term.rows() > 1 && term.cols() > 1) startPending();
+    }
+
+    private void startPending() {
+        String cmd = pendingCmd;
+        pendingCmd = null;
+        if (cmd == null) return;
+        File py = new File(Bootstrap.usr(this), "bin/python3");
+        File script = ptyScript();
+        if (!py.exists() || script == null) {
+            endTerminal();
+            println("El entorno Linux no está listo: no se puede abrir " + cmd + ".");
+            return;
+        }
+        try {
+            session = PtySession.start(py, script, Bootstrap.env(this), Bootstrap.home(this), cmd,
+                    term.rows(), term.cols(), ui, new PtySession.Listener() {
+                        @Override
+                        public void onOutput(String text) {
+                            term.feed(text);
+                        }
+
+                        @Override
+                        public void onExit(int code) {
+                            session = null;
+                            endTerminal();
+                            println("[" + cmd + " terminado con código " + code + "]");
+                        }
+                    });
+        } catch (IOException e) {
+            endTerminal();
+            println("No se pudo abrir " + cmd + ": " + e.getMessage());
+        }
+    }
+
+    /** Vuelve a la consola normal. */
+    private void endTerminal() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(term.getWindowToken(), 0);
+        termPanel.setVisibility(View.GONE);
+        scroll.setVisibility(View.VISIBLE);
+        inputRow.setVisibility(View.VISIBLE);
+        input.requestFocus();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (session != null && session.isRunning()) {
+            session.close();
+            session = null;
+            endTerminal();
+            println("Programa interactivo cerrado.");
+            return;
+        }
+        super.onBackPressed();
     }
 
     private void openFiles() {
