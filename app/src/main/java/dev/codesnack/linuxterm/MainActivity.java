@@ -283,7 +283,8 @@ public class MainActivity extends Activity {
     private void abrirTerminalInicial() {
         if (session != null) return;
         if (!envReady && !Bootstrap.isInstalled(this)) return;
-        openTerminal(shellCommand());
+        Bootstrap.asegurarBienvenida(this);
+        openTerminal(shellCommand(true));
     }
 
     /** Qué hace cada tecla de la barra según dónde esté el usuario. */
@@ -798,7 +799,18 @@ public class MainActivity extends Activity {
 
     /** Shell interactiva del entorno Linux (bash si está instalado, si no sh). */
     private String shellCommand() {
-        return new File(Bootstrap.usr(this), "bin/bash").exists() ? "bash -i" : "sh -i";
+        return shellCommand(false);
+    }
+
+    /**
+     * Comando de arranque de la shell. Con bienvenida, primero imprime
+     * ~/.bienvenida y luego cede el control a la shell interactiva, para que el
+     * texto quede arriba del todo y no se mezcle con el prompt.
+     */
+    private String shellCommand(boolean conBienvenida) {
+        String shell = new File(Bootstrap.usr(this), "bin/bash").exists() ? "bash -i" : "sh -i";
+        if (!conBienvenida || !Bootstrap.bienvenida(this).isFile()) return shell;
+        return "sh -c 'cat \"$HOME/.bienvenida\"; exec " + shell + "'";
     }
 
     /** Abre un programa interactivo a pantalla completa: se inicia cuando la pantalla conoce su tamaño. */
