@@ -324,6 +324,10 @@ public class MainActivity extends Activity {
             case "battery":
                 pedirSinOptimizacion();
                 return;
+            case "ejemplos":
+            case "examples":
+                mostrarEjemplos();
+                return;
             case "log":
                 showLog(args);
                 return;
@@ -699,6 +703,23 @@ public class MainActivity extends Activity {
      * activa, el sistema puede congelar el proceso en segundo plano y cortar los
      * sockets abiertos aunque haya un servicio en primer plano.
      */
+    /** Lista los scripts que se copian del APK a ~/examples. */
+    private void mostrarEjemplos() {
+        Bootstrap.ensureExtras(this);
+        java.io.File dir = new java.io.File(Bootstrap.home(this), "examples");
+        java.io.File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            println("Esta versión del APK no trae ejemplos.");
+            return;
+        }
+        println("Ejemplos en " + dir.getAbsolutePath() + ":");
+        for (java.io.File f : files) {
+            if (f.getName().startsWith(".")) continue;
+            println("  " + f.getName());
+        }
+        println("Ejecuta: python3 ~/examples/prueba_stratum.py <tu_direccion_btc>");
+    }
+
     private void pedirSinOptimizacion() {
         try {
             android.os.PowerManager pm =
