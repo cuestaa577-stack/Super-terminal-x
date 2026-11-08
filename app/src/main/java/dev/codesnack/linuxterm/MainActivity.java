@@ -191,10 +191,19 @@ public class MainActivity extends Activity {
         inputRow = row;
         setContentView(root);
 
-        println("Terminal Linux " + Syscmd.VERSION + " — escribe help para ver los comandos.");
+        println("Terminal Linux " + versionInstalada() + " — escribe help para ver los comandos.");
         println(Syscmd.HELP);
         println("");
         installEnvironment();
+    }
+
+    /** Versión real del APK instalado, para que la cabecera no mienta. */
+    private String versionInstalada() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return Syscmd.VERSION;
+        }
     }
 
     private void installEnvironment() {

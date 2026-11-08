@@ -30,6 +30,7 @@ public final class Syscmd {
             + "  limpiar                   borra la pantalla\n"
             + "  bateria                   quita la optimización de batería de la app\n"
             + "  ejemplos                  muestra la carpeta ~/examples\n"
+            + "  consola                   terminal a pantalla completa con barra de teclas\n"
             + "  help                      esta ayuda\n"
             + "Cualquier otro comando (ls, ps, cat, df...) se ejecuta en la shell de Android.";
 
