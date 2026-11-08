@@ -16,7 +16,7 @@ import android.widget.TextView;
  * terminal interactiva manda las secuencias reales al PTY.
  *
  *   ESC  /  -  HOME  ↑  END  PGUP
- *   TAB  CTRL  ALT  ←  ↓  →  PGDN
+ *   TAB  CTRL  ALT  ←  ↓  →  PGDN  ENTER
  *
  * CTRL y ALT son modificadores de toque: se encienden, se aplican a la
  * siguiente tecla y se apagan solos.
@@ -88,6 +88,7 @@ final class KeyBar extends LinearLayout {
         add(fila2, "↓", () -> objetivo.navegar("B"));
         add(fila2, "→", () -> objetivo.navegar("C"));
         add(fila2, "PGDN", () -> objetivo.navegar("6"));
+        add(fila2, "ENTER", () -> objetivo.control("ENTER"));
 
         addView(fila1, new LayoutParams(-1, -2));
         addView(fila2, new LayoutParams(-1, -2));
@@ -135,7 +136,7 @@ final class KeyBar extends LinearLayout {
         TextView b = new TextView(getContext());
         b.setText(texto);
         b.setTextColor(TEXTO);
-        b.setTextSize(13);
+        b.setTextSize(12);
         b.setTypeface(Typeface.MONOSPACE);
         b.setGravity(Gravity.CENTER);
         b.setSingleLine(true);
