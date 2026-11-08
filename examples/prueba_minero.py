@@ -52,6 +52,8 @@ PING_ESTABLE = 10           # ritmo normal
 ESPERA_INICIAL = 2
 RESUMEN_EVERY = 15
 LOTE_NONCES = 8192
+LOTE_WORKER = 20000
+MAX_WORKERS = 4             # mas procesos en un telefono acaban en calor y memoria
 DNS_TTL = 600               # segundos que se reutiliza la IP resuelta
 ESPERA_MAX = 30
 
@@ -84,12 +86,48 @@ def duracion(segundos):
     return "%.1f dias" % (segundos / 86400)
 
 
+def _worker(indice, total, generacion, memoria, cerrojo, cola, hashes):
+    """Proceso hijo: solo calcula. El padre es el unico que habla con la pool."""
+    sha = hashlib.sha256
+    cabecera = bytearray(80)
+    pack = struct.pack_into
+    ultima = -1
+    objetivo = b""
+    vueltas = 0
+    while True:
+        with cerrojo:
+            if generacion.value != ultima:
+                ultima = generacion.value
+                crudo = bytes(memoria[:108])
+        if ultima != generacion.value:
+            continue
+        cabecera[:76] = crudo[:76]
+        objetivo = crudo[76:108]
+        base = vueltas * LOTE_WORKER * total + indice
+        for k in range(LOTE_WORKER):
+            nonce = (base + k * total) & 0xFFFFFFFF
+            pack("<I", cabecera, 76, nonce)
+            if sha(sha(cabecera).digest()).digest()[::-1] <= objetivo:
+                cola.put((ultima, nonce))
+                break
+        with hashes.get_lock():
+            hashes.value += LOTE_WORKER
+        vueltas += 1
+
+
 def log(etiqueta, texto, color=AZUL):
     print("%s[%s]%s %-12s %s" % (color, time.strftime("%H:%M:%S"), RESET, etiqueta, texto),
           flush=True)
 
 
 class Minero:
+    workers = []            # procesos de calculo (vacio = un solo hilo)
+    cola = None
+    generacion = None
+    memoria = None
+    cerrojo = None
+    hashes_compartidos = None
+
     def __init__(self, cuenta, host, puerto):
         self.cuenta = cuenta
         self.host = host
@@ -379,8 +417,102 @@ class Minero:
                                 t["ntime"], "%08x" % nonce]})
         log("SHARE", "enviada nonce %08x (job %s)" % (nonce, t["job_id"]), AMARILLO)
 
+    # ---------------- calculo ----------------
+    def arrancar_workers(self):
+        """Procesos hijos para repartir los nonces. Devuelve cuantos arrancaron."""
+        try:
+            import multiprocessing as mp
+        except Exception as e:                      # build de Python sin procesos
+            log("MOTOR", "sin multiprocesos (%s): se usa un solo hilo" % e, AMARILLO)
+            return 0
+        try:
+            pedidos = int(os.environ.get("PRUEBA_PROCESOS") or 0)
+        except ValueError:
+            pedidos = 0
+        if pedidos <= 0:
+            pedidos = max(1, min(MAX_WORKERS, (os.cpu_count() or 1) - 1))
+        if pedidos <= 1:
+            return 0
+        try:
+            try:
+                ctx = mp.get_context("fork")
+            except (ValueError, AttributeError):
+                ctx = mp.get_context()
+            self.cola = ctx.Queue()
+            self.generacion = ctx.Value("i", 0)
+            self.memoria = ctx.Array("c", 108)
+            self.cerrojo = ctx.Lock()
+            self.hashes_compartidos = ctx.Value("L", 0)
+            for i in range(pedidos):
+                proceso = ctx.Process(target=_worker, name="calculo-%d" % i, daemon=True,
+                                      args=(i, pedidos, self.generacion, self.memoria,
+                                            self.cerrojo, self.cola, self.hashes_compartidos))
+                proceso.start()
+                self.workers.append(proceso)
+        except Exception as e:
+            log("MOTOR", "no se pudo repartir (%s): un solo hilo" % e, AMARILLO)
+            self.parar_workers()
+            return 0
+        log("MOTOR", "%d procesos de calculo" % len(self.workers), VERDE)
+        threading.Thread(target=self.recolector, name="recolector", daemon=True).start()
+        return len(self.workers)
+
+    def parar_workers(self):
+        for proceso in self.workers:
+            try:
+                proceso.terminate()
+            except Exception:
+                pass
+        self.workers = []
+
+    def publicar_trabajo(self, t):
+        """Manda cabecera y objetivo a los hijos. Solo lo hace el padre."""
+        cabecera, target = self.preparar(t)
+        if not cabecera or not self.memoria:
+            return
+        with self.cerrojo:
+            self.memoria[:76] = cabecera
+            self.memoria[76:108] = target.to_bytes(32, "big")
+            self.generacion.value += 1
+            self.gen_trabajo = (self.generacion.value, t)
+
+    def recolector(self):
+        """Recibe los nonces que encuentran los hijos y los envia a la pool."""
+        while self.corriendo:
+            try:
+                generacion, nonce = self.cola.get(timeout=1)
+            except Exception:
+                continue
+            vigente = getattr(self, "gen_trabajo", None)
+            if not vigente or vigente[0] != generacion:
+                continue                    # trabajo ya vencido
+            with self.trabajo_lock:
+                sigue = self.trabajo is vigente[1]
+            if sigue:
+                self.enviar_share(vigente[1], nonce)
+
     def minar(self):
-        log("MOTOR", "hilo de hashing iniciado", GRIS)
+        if self.arrancar_workers():
+            self.minar_repartido()
+        else:
+            log("MOTOR", "un solo hilo de hashing", GRIS)
+            self.minar_hilo()
+
+    def minar_repartido(self):
+        """El padre solo vigila el trabajo; el calculo esta en los hijos."""
+        ultimo = None
+        while self.corriendo:
+            with self.trabajo_lock:
+                t = self.trabajo
+            if t and t is not ultimo:
+                self.publicar_trabajo(t)
+                ultimo = t
+            time.sleep(0.3)
+
+    def minar_hilo(self):
+        cabecera_buffer = bytearray(80)
+        empaquetar = struct.pack_into
+        sha = hashlib.sha256
         while self.corriendo:
             with self.trabajo_lock:
                 t = self.trabajo
@@ -391,15 +523,17 @@ class Minero:
             if not cabecera:
                 time.sleep(0.2)
                 continue
+            objetivo = target.to_bytes(32, "big")
+            cabecera_buffer[:76] = cabecera
             desde = self.nonce_actual
             encontrado = None
             for i in range(LOTE_NONCES):
                 nonce = (desde + i) & 0xFFFFFFFF
-                h = doble_sha(cabecera + struct.pack("<I", nonce))
-                self.hashes += 1
-                if int.from_bytes(h, "little") <= target:
+                empaquetar("<I", cabecera_buffer, 76, nonce)
+                if sha(sha(cabecera_buffer).digest()).digest()[::-1] <= objetivo:
                     encontrado = nonce
                     break
+            self.hashes += LOTE_NONCES
             self.nonce_actual = (desde + LOTE_NONCES) & 0xFFFFFFFF
             with self.trabajo_lock:
                 sigue = self.trabajo is t
@@ -411,7 +545,10 @@ class Minero:
         while self.corriendo:
             time.sleep(RESUMEN_EVERY)
             seg = max(1.0, time.time() - self.inicio)
-            hps = self.hashes / seg
+            total = self.hashes
+            if self.hashes_compartidos is not None:
+                total += self.hashes_compartidos.value
+            hps = total / seg
             ritmo = "%.0f H/s" % hps
             if hps >= 1000:
                 ritmo = "%.1f kH/s" % (hps / 1000)
@@ -419,7 +556,7 @@ class Minero:
             print("  tiempo        %s" % duracion(seg))
             print("  conexion      %s" % ("abierta" if self.conectado else "reintentando"))
             print("  hashrate      %s" % ritmo)
-            print("  hashes        %d" % self.hashes)
+            print("  hashes        %d" % total)
             print("  shares        %d enviadas · %d aceptadas · %d rechazadas"
                   % (self.shares_enviadas, self.shares_aceptadas, self.shares_rechazadas))
             print("  dificultad    %g" % self.dificultad)
@@ -451,6 +588,7 @@ def main():
         minero.conectar()
     except KeyboardInterrupt:
         minero.corriendo = False
+        minero.parar_workers()
         minero.cerrar()
         log("FIN", "detenido · %d hashes, %d shares enviadas"
             % (minero.hashes, minero.shares_enviadas), AMARILLO)
