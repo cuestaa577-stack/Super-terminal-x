@@ -117,6 +117,8 @@ public class MainActivity extends Activity {
         termPanel.setOrientation(LinearLayout.VERTICAL);
         termPanel.setVisibility(View.GONE);
         termPanel.addView(cabeceraTerminal(), new LinearLayout.LayoutParams(-1, -2));
+        // match_parent: la terminal se estira al marco de la pantalla y se
+        // adapta al girar o al tamaño de cada modelo, sin zoom manual.
         termPanel.addView(term, new LinearLayout.LayoutParams(-1, 0, 1f));
         root.addView(termPanel, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -218,9 +220,6 @@ public class MainActivity extends Activity {
         titulo.setTextSize(11);
         barra.addView(titulo, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        barra.addView(botonZoom("A-", () -> term.zoomMenos()));
-        barra.addView(botonZoom("A+", () -> term.zoomMas()));
-
         TextView menu = new TextView(this);
         menu.setText("☰ Menú");
         menu.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -231,21 +230,6 @@ public class MainActivity extends Activity {
         menu.setOnClickListener(this::menuTerminal);
         barra.addView(menu);
         return barra;
-    }
-
-    /** Botón pequeño de zoom para la cabecera de la terminal. */
-    private TextView botonZoom(String texto, Runnable accion) {
-        TextView b = new TextView(this);
-        b.setText(texto);
-        b.setTypeface(android.graphics.Typeface.MONOSPACE);
-        b.setTextColor(Color.rgb(240, 244, 248));
-        b.setTextSize(13);
-        b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(10), dp(4), dp(10), dp(4));
-        b.setClickable(true);
-        b.setFocusable(false);
-        b.setOnClickListener(v -> accion.run());
-        return b;
     }
 
     /** Menú de la terminal: consola de comandos, diagnóstico, entorno, ejemplos. */
