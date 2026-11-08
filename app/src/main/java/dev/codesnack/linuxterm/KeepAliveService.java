@@ -18,6 +18,11 @@ import android.os.IBinder;
 public class KeepAliveService extends Service {
     private static final String CHANNEL = "trabajos";
     private static final int NOTIFICATION_ID = 1;
+    /** Tope de seguridad: si algo se cuelga, el bloqueo no queda para siempre. */
+    private static final long LOCK_TIMEOUT_MS = 12 * 60 * 60 * 1000L;
+
+    private android.os.PowerManager.WakeLock wake;
+    private android.net.wifi.WifiManager.WifiLock wifi;
 
     /** Actualiza el servicio según haya o no trabajos activos. */
     static void sync(Context ctx) {
@@ -41,9 +46,34 @@ public class KeepAliveService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         int running = Jobs.runningCount();
         if (running == 0) {
+            releaseLocks();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
+        }
+
+        // Red y CPU despiertas mientras dure el trabajo. Sin esto, el Wi-Fi
+        // entra en ahorro al apagar la pantalla y los sockets abiertos se
+        // abortan con Errno 103.
+        if (wake == null) {
+            android.os.PowerManager pm =
+                    (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            wake = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "linuxterm:trabajos");
+            wake.setReferenceCounted(false);
+            wake.acquire(LOCK_TIMEOUT_MS);
+        } else if (!wake.isHeld()) {
+            wake.acquire(LOCK_TIMEOUT_MS);
+        }
+        if (wifi == null) {
+            android.net.wifi.WifiManager wm =
+                    (android.net.wifi.WifiManager) getApplicationContext()
+                            .getSystemService(Context.WIFI_SERVICE);
+            wifi = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "linuxterm:trabajos");
+            wifi.setReferenceCounted(false);
+            wifi.acquire();
+        } else if (!wifi.isHeld()) {
+            wifi.acquire();
         }
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -68,7 +98,26 @@ public class KeepAliveService extends Service {
                 .setOngoing(true)
                 .build();
         startForeground(NOTIFICATION_ID, n);
-        return START_NOT_STICKY;
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        releaseLocks();
+        super.onDestroy();
+    }
+
+    private void releaseLocks() {
+        try {
+            if (wake != null && wake.isHeld()) wake.release();
+        } catch (RuntimeException ignored) {
+        }
+        try {
+            if (wifi != null && wifi.isHeld()) wifi.release();
+        } catch (RuntimeException ignored) {
+        }
+        wake = null;
+        wifi = null;
     }
 
     @Override

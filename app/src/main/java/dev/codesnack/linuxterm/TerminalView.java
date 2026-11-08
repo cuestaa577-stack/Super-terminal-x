@@ -53,76 +53,54 @@ public class TerminalView extends View {
     private float touchDownY;
     private boolean touchMoved;
 
-    /** Límites del zoom de texto, en sp. */
-    private static final float MIN_SP = 8f;
-    private static final float MAX_SP = 28f;
-    private static final String PREFS = "terminal";
-    private static final String KEY_SP = "text_sp";
     /**
-     * Tamaño de texto compartido por todas las instancias del proceso: cada
-     * programa abre una TerminalView nueva, así que el zoom se mantiene durante
-     * toda la sesión aunque cambies de pantalla.
+     * Tamaño de texto fijo. No hay zoom: ni pellizco, ni doble toque, ni
+     * botones. Se mide en dp, no en sp, para que la escala de fuente del
+     * sistema tampoco lo cambie.
      */
-    private static float sessionSp = -1f;
+    static final float TEXTO_DP = 13f;
 
-    private float textSp;
-    private float scaleStartSp;
-    private ScaleGestureDetector scaleDetector;
-    private GestureDetector gestos;
-    private boolean dobleToque;
-    /** Salto de cada toque en el zoom. */
-    private static final float PASO_SP = 2f;
+    private final float textSp = TEXTO_DP;
 
     public TerminalView(Context context) {
         super(context);
         setFocusable(true);
         setFocusableInTouchMode(true);
         paint.setTypeface(Typeface.MONOSPACE);
-        textSp = cargarSp(context);
         aplicarMetricas();
-        scaleDetector = new ScaleGestureDetector(context,
-                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-                    @Override
-                    public boolean onScaleBegin(ScaleGestureDetector detector) {
-                        scaleStartSp = textSp;
-                        return true;
-                    }
-
-                    @Override
-                    public boolean onScale(ScaleGestureDetector detector) {
-                        fijarSp(scaleStartSp * detector.getScaleFactor(), true);
-                        return true;
-                    }
-                });
-        gestos = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
-            @Override
-            public boolean onDoubleTap(MotionEvent e) {
-                dobleToque = true;
-                zoomCiclo();
-                return true;
-            }
-        });
         emu = new TerminalEmulator(24, 80, this::sendRaw);
     }
 
-    /** Un toque doble recorre los tamaños: 13, 16, 19, 22 y vuelve a 13. */
-    void zoomCiclo() {
-        float siguiente = textSp + 3f;
-        if (siguiente > MAX_SP - 0.01f) siguiente = MIN_SP;
-        fijarSp(siguiente, true);
-    }
-
-    void zoomMas() {
-        fijarSp(textSp + PASO_SP, true);
-    }
-
-    void zoomMenos() {
-        fijarSp(textSp - PASO_SP, true);
-    }
-
-
     private float sp(float v) {
-        return v * getResources().getDisplayMetrics().scaledDensity;
+        return v * getResources().getDisplayMetrics().density;
+    }
+
+    /** Recalcula el tamaño de celda a partir del tamaño de fuente actual. */
+    private void aplicarMetricas() {
+        paint.setTextSize(sp(textSp));
+        cellW = paint.measureText("M");
+        Paint.FontMetrics fm = paint.getFontMetrics();
+        cellH = fm.bottom - fm.top;
+        ascent = -fm.top;
+    }
+
+    /** Tamaño de texto actual, en sp. */
+    float textSp() {
+        return textSp;
+    }
+
+    /** Ajusta el emulador al tamaño de la vista con la celda actual. */
+    private void resizeToView() {
+        int w = getWidth();
+        int h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        int rows = rowsForHeight(h);
+        int cols = colsForWidth(w);
+        if (rows == lastRows && cols == lastCols) return;
+        lastRows = rows;
+        lastCols = cols;
+        emu.resize(rows, cols);
+        if (listener != null) listener.onSize(rows, cols);
     }
 
     /** Recalcula el tamaño de celda a partir del tamaño de fuente actual. */
@@ -334,7 +312,7 @@ public class TerminalView extends View {
                 touchMoved = false;
                 return true;
             case MotionEvent.ACTION_MOVE: {
-                if (event.getPointerCount() > 1 || scaleDetector.isInProgress()) {
+                if (event.getPointerCount() > 1) {
                     touchMoved = true;
                     touchLastY = y;
                     return true;

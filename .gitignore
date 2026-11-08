@@ -2,8 +2,3 @@ build/
 debug.keystore
 # Copia de examples/ que build.sh mete en los assets
 app/src/main/assets/examples/
-
-# Restos de Python
-examples/__pycache__/
-__pycache__/
-*.pyc

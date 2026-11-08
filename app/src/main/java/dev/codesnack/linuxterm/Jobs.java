@@ -17,6 +17,8 @@ import java.util.Map;
 final class Jobs {
     private static final Map<Integer, Job> JOBS = new LinkedHashMap<>();
     private static int nextId = 1;
+    /** Comandos de la terminal que siguen vivos aunque no sean trabajos `bg`. */
+    private static int foreground = 0;
 
     static final class Job {
         final int id;
@@ -81,11 +83,25 @@ final class Jobs {
     }
 
     static synchronized int runningCount() {
-        int n = 0;
+        int n = foreground;
         for (Job j : JOBS.values()) {
             if (j.proc.isAlive()) n++;
         }
         return n;
+    }
+
+    /**
+     * Marca que hay un comando corriendo en la terminal. Mientras el contador
+     * esté por encima de cero, KeepAliveService mantiene el proceso en primer
+     * plano y con la red despierta, que es lo que evita los cortes de socket
+     * (Errno 103) al apagar la pantalla o cambiar de app.
+     */
+    static synchronized void beginForeground() {
+        foreground++;
+    }
+
+    static synchronized void endForeground() {
+        if (foreground > 0) foreground--;
     }
 
     static synchronized String list() {

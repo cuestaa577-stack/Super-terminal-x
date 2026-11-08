@@ -281,7 +281,10 @@ def main():
     if len(sys.argv) < 2:
         print("uso: prueba_stratum.py <direccion_btc> [host] [puerto]")
         return 2
-    usuario = sys.argv[1]
+    usuario = sys.argv[1].strip()
+    if not usuario:
+        print("uso: prueba_stratum.py <direccion_btc> [host] [puerto]")
+        return 2
     host = sys.argv[2] if len(sys.argv) > 2 else "solo.ckpool.org"
     puerto = int(sys.argv[3]) if len(sys.argv) > 3 else 3333
 
@@ -299,9 +302,12 @@ def main():
                 ESTADO.ultimo_mensaje = time.time()
             enviar(s, {"id": nuevo_id(), "method": "mining.subscribe",
                        "params": ["prueba/2.0"]}, "suscripcion")
+            # La cuenta va tal cual se escribió: "direccion" o
+            # "direccion.worker". Añadir un sufijo propio hace que la pool
+            # rechace la autorización por formato.
             enviar(s, {"id": nuevo_id(), "method": "mining.authorize",
-                       "params": [usuario + ".prueba", "x"]}, "autorizacion")
-            log("CONECTADO", "%s:%s como %s.prueba" % (host, puerto, usuario))
+                       "params": [usuario, "x"]}, "autorizacion")
+            log("CONECTADO", "%s:%s como %s" % (host, puerto, usuario))
             intento = 0
             s.settimeout(5)
             buffer = b""

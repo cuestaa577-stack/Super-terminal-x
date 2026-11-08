@@ -117,6 +117,8 @@ public class MainActivity extends Activity {
         termPanel.setOrientation(LinearLayout.VERTICAL);
         termPanel.setVisibility(View.GONE);
         termPanel.addView(cabeceraTerminal(), new LinearLayout.LayoutParams(-1, -2));
+        // match_parent: la terminal se estira al marco de la pantalla y se
+        // adapta al girar o al tamaño de cada modelo, sin zoom manual.
         termPanel.addView(term, new LinearLayout.LayoutParams(-1, 0, 1f));
         root.addView(termPanel, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -218,9 +220,6 @@ public class MainActivity extends Activity {
         titulo.setTextSize(11);
         barra.addView(titulo, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        barra.addView(botonZoom("A-", () -> term.zoomMenos()));
-        barra.addView(botonZoom("A+", () -> term.zoomMas()));
-
         TextView menu = new TextView(this);
         menu.setText("☰ Menú");
         menu.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -231,21 +230,6 @@ public class MainActivity extends Activity {
         menu.setOnClickListener(this::menuTerminal);
         barra.addView(menu);
         return barra;
-    }
-
-    /** Botón pequeño de zoom para la cabecera de la terminal. */
-    private TextView botonZoom(String texto, Runnable accion) {
-        TextView b = new TextView(this);
-        b.setText(texto);
-        b.setTypeface(android.graphics.Typeface.MONOSPACE);
-        b.setTextColor(Color.rgb(240, 244, 248));
-        b.setTextSize(13);
-        b.setGravity(Gravity.CENTER);
-        b.setPadding(dp(10), dp(4), dp(10), dp(4));
-        b.setClickable(true);
-        b.setFocusable(false);
-        b.setOnClickListener(v -> accion.run());
-        return b;
     }
 
     /** Menú de la terminal: consola de comandos, diagnóstico, entorno, ejemplos. */
@@ -540,6 +524,10 @@ public class MainActivity extends Activity {
             case "jobs":
                 println(Jobs.list());
                 return;
+            case "bateria":
+            case "battery":
+                pedirSinOptimizacion();
+                return;
             case "ejemplos":
             case "examples":
                 mostrarEjemplos();
@@ -717,49 +705,60 @@ public class MainActivity extends Activity {
         }, "probar").start();
     }
 
-    /** Cualquier otro comando: se ejecuta con la shell de Android, con límite de 5 minutos. */
+    /**
+     * Cualquier otro comando: se ejecuta dentro del PTY, sin límite de tiempo y
+     * con la app en primer plano mientras dure. La salida se va pintando en
+     * vivo para que se vea el progreso de scripts largos (mineros, SSH, etc.).
+     */
     private void runShell(String line) {
         if (!envReady && !Bootstrap.isInstalled(this)) {
             println("El entorno todavía se está preparando. Espera un momento.");
             return;
         }
+        // Mientras haya un comando vivo, la app queda en primer plano con la
+        // red despierta. Es lo que evita el Errno 103 al apagar la pantalla.
+        Jobs.beginForeground();
+        KeepAliveService.sync(this);
         new Thread(() -> {
-            StringBuilder sb = new StringBuilder();
+            Process p = null;
             try {
                 ProcessBuilder pb = shellCommand(line);
                 pb.environment().putAll(Bootstrap.env(this));
                 pb.directory(Bootstrap.home(this));
                 pb.redirectErrorStream(true);
-                Process p = pb.start();
+                p = pb.start();
                 BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), "UTF-8"));
-                Thread reader = new Thread(() -> {
-                    try {
-                        String l;
-                        while ((l = r.readLine()) != null) {
-                            l = ANSI.matcher(l).replaceAll("").replace("\r", "");
-                            synchronized (sb) {
-                                sb.append(l).append('\n');
-                            }
-                        }
-                    } catch (java.io.IOException ignored) {
+                StringBuilder pending = new StringBuilder();
+                long lastPost = 0;
+                String l;
+                while ((l = r.readLine()) != null) {
+                    pending.append(ANSI.matcher(l).replaceAll("").replace("\r", "")).append('\n');
+                    long now = System.currentTimeMillis();
+                    if (now - lastPost >= 200) {
+                        String chunk = pending.toString();
+                        pending.setLength(0);
+                        ui.post(() -> println(chunk));
+                        lastPost = now;
                     }
-                });
-                reader.start();
-                if (!p.waitFor(300, TimeUnit.SECONDS)) {
-                    p.destroyForcibly();
-                    sb.append("(cortado: más de 5 minutos)\n");
                 }
-                reader.join(1000);
-                int code = p.isAlive() ? -1 : p.exitValue();
-                if (code != 0 && code != -1) sb.append("(código de salida ").append(code).append(")");
+                if (pending.length() > 0) {
+                    String chunk = pending.toString();
+                    pending.setLength(0);
+                    ui.post(() -> println(chunk));
+                }
+                int code = p.waitFor();
+                if (code != 0) {
+                    final int c = code;
+                    ui.post(() -> println("(código de salida " + c + ")"));
+                }
             } catch (Exception e) {
-                sb.append("No se pudo ejecutar: ").append(e.getMessage());
+                final String msg = String.valueOf(e.getMessage());
+                ui.post(() -> println("No se pudo ejecutar: " + msg));
+            } finally {
+                if (p != null && p.isAlive()) p.destroy();
+                Jobs.endForeground();
+                KeepAliveService.sync(MainActivity.this);
             }
-            String out;
-            synchronized (sb) {
-                out = Syscmd.trimEnd(sb.toString());
-            }
-            ui.post(() -> println(out.isEmpty() ? "(sin salida)" : out));
         }, "shell").start();
     }
 
@@ -903,6 +902,11 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Pide a Android que no optimice la batería de esta app. Con la optimización
+     * activa, el sistema puede congelar el proceso en segundo plano y cortar los
+     * sockets abiertos aunque haya un servicio en primer plano.
+     */
     /** Lista los scripts que se copian del APK a ~/examples. */
     private void mostrarEjemplos() {
         Bootstrap.ensureExtras(this);
@@ -920,6 +924,24 @@ public class MainActivity extends Activity {
         println("Ejecuta: python3 ~/examples/prueba_stratum.py <tu_direccion_btc>");
     }
 
+    private void pedirSinOptimizacion() {
+        try {
+            android.os.PowerManager pm =
+                    (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                println("La app ya está exenta de la optimización de batería.");
+                return;
+            }
+            Intent i = new Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(android.net.Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+            println("Acepta la excepción de batería para que Android no corte los trabajos.");
+        } catch (RuntimeException e) {
+            println("No se pudo abrir el ajuste de batería: " + e.getMessage());
+            println("Hazlo a mano en Ajustes > Aplicaciones > Terminal Linux > Batería > Sin restricciones.");
+        }
+    }
 
     private void showLog(String[] args) {
         if (args.length == 0) {

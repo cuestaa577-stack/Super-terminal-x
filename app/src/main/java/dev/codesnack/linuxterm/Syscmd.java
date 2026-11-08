@@ -28,6 +28,7 @@ public final class Syscmd {
             + "  procs [-m] [N] [filtro]   procesos por CPU (o por memoria con -m)\n"
             + "                            ejemplos: procs 10 | procs -m | procs java\n"
             + "  limpiar                   borra la pantalla\n"
+            + "  bateria                   quita la optimización de batería de la app\n"
             + "  ejemplos                  muestra la carpeta ~/examples\n"
             + "  consola                   terminal a pantalla completa con barra de teclas\n"
             + "                            (la app arranca ahí; ☰ Menú abre diagnóstico, entorno y ejemplos)\n"
