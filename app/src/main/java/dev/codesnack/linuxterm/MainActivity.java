@@ -936,6 +936,7 @@ public class MainActivity extends Activity {
         }
         println("Probar el socket:  python3 ~/examples/prueba_stratum.py <direccion_btc>");
         println("Minar de verdad:   python3 ~/examples/prueba_minero.py <direccion_btc>");
+        println("Ver por que corta: python3 ~/examples/diagnostico_red.py");
     }
 
     private void pedirSinOptimizacion() {
