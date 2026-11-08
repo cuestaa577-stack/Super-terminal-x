@@ -177,6 +177,41 @@ public final class Bootstrap {
         destino.setExecutable(true, false);
     }
 
+    /**
+     * Texto que se muestra al abrir la terminal, al estilo de Termux pero con
+     * la identidad de la app. Vive en ~/.bienvenida, así que se puede editar
+     * sin recompilar: si el archivo ya existe no se toca.
+     */
+    private static final String BIENVENIDA =
+            "\033[1;32mWelcome Linux\033[0m\n"
+            + "Terminal Linux, tu entorno local.\n"
+            + "\n"
+            + "Docs e incidencias:\n"
+            + "  github.com/cuestaa577-stack/Super-terminal-x\n"
+            + "\n"
+            + "Comandos utiles:\n"
+            + "  help                 lista de comandos\n"
+            + "  ejemplos             scripts de prueba\n"
+            + "  nano / vim archivo   editar texto\n"
+            + "  python3 script.py    ejecutar Python\n"
+            + "\n"
+            + "Probar la pool:\n"
+            + "  python3 prueba_stratum.py <direccion_btc>\n"
+            + "\n";
+
+    /** Archivo con la bienvenida que se imprime al abrir la terminal. */
+    public static File bienvenida(Context ctx) {
+        return new File(home(ctx), ".bienvenida");
+    }
+
+    /** Crea ~/.bienvenida si no existe. Nunca pisa uno editado por el usuario. */
+    public static void asegurarBienvenida(Context ctx) {
+        File f = bienvenida(ctx);
+        if (f.isFile()) return;
+        home(ctx).mkdirs();
+        escribir(f, BIENVENIDA);
+    }
+
     /** Variables de entorno de los procesos del entorno Linux. */
     public static Map<String, String> env(Context ctx) {
         File usr = usr(ctx);
